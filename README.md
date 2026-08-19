@@ -81,7 +81,7 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
 - [x] **P1** 캡처 → Metal 4 추론 → 깊이 시각화 · [파이프라인 해부](https://jsonpassion.github.io/Delight/pipeline.html)
 - [x] **P2** 언프로젝션 + 노멀 + 마우스로 조명 끌기
 - [x] **P3** 레이마칭 그림자 + 스펙큘러 + 핀치로 조명 잡기
-- [ ] **P4** AO · Vision 세그멘테이션으로 정확한 실루엣
+- [x] **P4** AO · Vision 세그멘테이션 · 화질 개선(해상도·sRGB·후광)
 - [ ] **P5** Syphon → OBS → Zoom
 - [ ] **P6** 깊이 안정화 (정합 · 시간필터 · 업샘플)
 - [ ] **P7** CMIO Camera Extension

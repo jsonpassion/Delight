@@ -143,6 +143,8 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#raymarch">그림자: POM과 같은 알고리즘</a></li>
     <li><a href="#backlight">역광: 빛이 뒤로 갔을 때</a></li>
     <li><a href="#pinch">핀치: 손이 곧 컨트롤러</a></li>
+    <li><a href="#quality">화질 해부</a></li>
+    <li><a href="#occlusion-bug">깊이맵이 거짓말할 때</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
@@ -541,6 +543,106 @@ return neighborhood[index]   <span class="cmt">// 평균도 중앙값도 아닌 
     <p style="margin-top:.6rem">z가 0.30~1.50 m를 오간다는 것은 <strong>정면광에서 완전한 역광까지
       전 범위를 손으로 커버한다</strong>는 뜻이다.</p>
   </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="quality">
+  <h2><span class="num">06-2</span>화질: "카메라 같지 않다"의 해부</h2>
+  <p class="dek">한 가지 증상에 원인이 넷이었다. 하나씩 지워야 보인다.</p>
+
+  <p>리라이팅이 돌기 시작하자 결과가 <strong>흐릿하고 색이 뜬 합성 이미지</strong>처럼 보였다.
+    "조명 알고리즘이 나쁜가" 싶었지만, 실제로는 조명과 무관한 문제가 셋 섞여 있었다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>증상</th><th>원인</th><th>수정</th></tr></thead>
+      <tbody>
+        <tr class="lead">
+          <td>흐릿함</td>
+          <td class="note">출력이 518×392. 카메라 해상도까지 <strong>3배 확대</strong>되고 있었다</td>
+          <td class="note">조명만 1554×1176로 계산. 깊이맵은 저주파라 저해상도로 둬도 티가 안 난다</td>
+        </tr>
+        <tr>
+          <td>색이 뜸 · 대비 상실</td>
+          <td class="note">sRGB로 인코딩된 값을 <strong>선형으로 착각</strong>하고 조명을 더했다</td>
+          <td class="note">셰이더에서 명시적으로 선형화 → 조명 → 역선형화</td>
+        </tr>
+        <tr>
+          <td>질감이 평평함</td>
+          <td class="note">pseudo-albedo가 <strong>픽셀별 루마로 나눗셈</strong>. 밝기 정보를 통째로 날렸다</td>
+          <td class="note">나눗셈 제거. 가산 조명에서는 밝은 표면이 더 반사하는 게 물리적으로 옳다</td>
+        </tr>
+        <tr>
+          <td>전체적으로 어두움</td>
+          <td class="note">ACES 톤매핑이 <strong>무조건</strong> 적용돼 조명이 꺼져도 원본이 눌렸다</td>
+          <td class="note">소프트 클립 — 1 이하는 원본 그대로 통과</td>
+        </tr>
+      </tbody>
+      <caption>sRGB를 텍스처 포맷(_srgb)으로 처리하지 않고 셰이더에서 한 이유: 같은 카메라 텍스처를 전처리가 0-255 sRGB 원본으로 읽어야 한다(모델이 그렇게 학습됐다). 포맷을 바꾸면 추론 입력이 깨진다.</caption>
+    </table>
+  </div>
+
+  <h3>그리고 흰 후광</h3>
+  <p>해상도와 색을 고치고 나니 새 문제가 보였다 — <strong>얼굴과 손 둘레에 흰 테두리</strong>가 탔다.
+    범인은 역광의 투과 산란이었다. "얇은 부위"를 깊이 기울기로 추정했는데,
+    <strong>실루엣 경계가 가장 큰 기울기</strong>를 갖는다. 귀와 실루엣을 구분하지 못한 것이다.</p>
+
+  <pre><code><span class="cmt">// 고치기 전 — 기울기가 클수록 얇다고 봤다</span>
+return saturate(gradient * 40.0);                        <span class="cmt">// ✗ 실루엣이 최대값</span>
+
+<span class="cmt">// 고친 후 — 대역 통과. 실루엣은 얇은 게 아니라 끊긴 것이다</span>
+<span class="hl">float rising  = smoothstep(0.002, 0.020, gradient);</span>       <span class="cmt">// 평평한 면은 얇지 않다</span>
+<span class="hl">float falling = 1.0 - smoothstep(0.045, 0.110, gradient);</span> <span class="cmt">// 절벽도 얇지 않다</span>
+<span class="hl">return rising * falling;</span></code></pre>
+
+  <p>같은 이유로 림라이트도 절벽에서 억제하고, AO의 가림 판정에도 거리 상한을 뒀다 —
+    실루엣 너머의 배경은 "가림"이 아니라 다른 물체다.</p>
+
+  <div class="call cool">
+    <span class="lbl">이 버그를 어떻게 찾았나</span>
+    <p>앱 창을 눈으로 보는 것만으로는 원인을 나눌 수 없었다. 그래서 재조명 결과를
+      <strong>PNG로 덤프하는 진단 경로</strong>를 만들었다. 정지 이미지로 보니
+      후광이 실루엣을 정확히 따라간다는 게 한눈에 보였고, 거기서 기울기가 범인임이 나왔다.
+      실시간 화면에서는 절대 못 봤을 것이다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="occlusion-bug">
+  <h2><span class="num">06-3</span>깊이맵이 거짓말하는 순간</h2>
+  <p class="dek">광원을 머리 뒤로 보내면 오히려 머리 앞에 붙어 고정되던 버그.</p>
+
+  <p>핀치의 z를 깊이맵에서 읽는 설계는 우아했다. 손도 프레임 안에 있으니 공짜라고 썼다.
+    그런데 <strong>손이 가려지는 순간 이 전제가 무너진다.</strong></p>
+
+  <p>손을 머리 뒤로 가져가면, 화면의 그 지점에서 깊이맵이 읽는 것은 손이 아니라
+    <strong>머리</strong>다. 손이 머리에 가려졌으니 당연하다.
+    게다가 "가장 가까운 쪽 분위수"를 쓰므로 더 가까운 머리를 확실하게 고른다.
+    결과적으로 광원이 머리보다 7cm 앞에 고정된다 — 뒤로 보내려는 의도와 정확히 반대다.</p>
+
+  <div class="call bad">
+    <span class="lbl">튜닝으로는 못 고친다</span>
+    <p>임계값을 조정하거나 샘플 반경을 키워도 소용없다. 가려진 물체의 깊이는
+      <strong>2.5D 깊이맵에 애초에 존재하지 않는 정보</strong>다.
+      다른 신호가 필요하다는 뜻이지, 같은 신호를 더 잘 쓰면 되는 문제가 아니다.</p>
+  </div>
+
+  <h3>가림에 영향받지 않는 신호</h3>
+  <p>손목에서 중지 MCP까지의 픽셀 거리는 <code>1/Z</code>에 비례한다.
+    그리고 이 값은 <strong>손이 무엇에 가려져 있든 상관없다</strong> — Vision이 손을 보는 한 유효하다.</p>
+
+  <pre><code><span class="cmt">// 핀치 시작 순간에만 깊이맵을 믿는다. 이때는 손이 앞에 나와 있어 가려질 일이 없다.</span>
+if (!isGrabbing || referenceHandScale &lt;= 0) {
+    referenceHandScale = handScale
+    referenceHandZ = depthZ
+    return depthZ
+}
+<span class="cmt">// 이후에는 크기 변화만 본다. 작아 보이면 멀어진 것이다 — 가려져 있어도 성립한다.</span>
+<span class="hl">let estimated = referenceHandZ * (referenceHandScale / handScale)</span></code></pre>
+
+  <p>깊이맵은 <strong>한 번의 캘리브레이션</strong>에만 쓰고, 추적은 손 크기가 맡는다.
+    두 신호의 강점이 정확히 상보적이다 — 깊이맵은 절대 거리를 알지만 가림에 약하고,
+    손 크기는 절대 거리를 모르지만 가림에 강하다.</p>
 </section>
 
 <!-- ─────────────────────────────────────── -->
