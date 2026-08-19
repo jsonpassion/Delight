@@ -143,6 +143,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#raymarch">그림자: POM과 같은 알고리즘</a></li>
     <li><a href="#backlight">역광: 빛이 뒤로 갔을 때</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
+    <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
     <li><a href="#budget">성능 예산</a></li>
     <li><a href="#repro">재현 절차</a></li>
@@ -247,7 +248,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
         <tr class="lead"><td>ML 추론</td><td>텐서 → 역깊이 텐서</td><td class="n">15.4 ms</td><td class="note">전체 비용의 98%. 여기가 예산의 전부다</td></tr>
         <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정</td></tr>
         <tr><td>C2 업샘플</td><td>518×392 → 출력 해상도</td><td class="n">~1.0 ms</td><td class="note">bilinear면 실루엣이 뭉개져 그림자가 얼굴 밖으로 샌다</td></tr>
-        <tr><td>C3 지오메트리</td><td>깊이 → 뷰공간 위치·노멀</td><td class="n">~0.8 ms</td><td class="note">조명 계산에 노멀이 필요하다. 5-tap이라야 실루엣이 안 깨진다</td></tr>
+        <tr><td>C3 지오메트리</td><td>깊이 → 위치·노멀·마스크</td><td class="n">~0.8 ms</td><td class="note">조명 계산에 노멀이 필요하다. 5-tap이라야 실루엣이 안 깨진다</td></tr>
         <tr><td>C4 AO</td><td>위치·노멀 → 차폐량</td><td class="n">~1.5 ms</td><td class="note">턱밑·목·코 옆 접촉 그늘. 광원과 무관하게 항상 이득</td></tr>
         <tr><td>C5 리라이팅</td><td>전부 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">레이마칭 그림자 + 확산 + 스펙큘러 + 역광</td></tr>
       </tbody>
@@ -533,6 +534,36 @@ if (visible) glow += exp(-d*d*900.0) * lightColor * intensity;</code></pre>
     </div>
   </div>
 
+  <h3>SwiftUI와 Metal 경계에서 터진 두 건</h3>
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">EXC_BAD_ACCESS · UnaryLayoutEngine.sizeThatFits 무한 재귀</div>
+      <h4>GeometryReader로 NSViewRepresentable을 감싸면 안 된다</h4>
+      <p>드래그 좌표를 얻으려고 <code>GeometryReader</code>로 Metal 뷰를 감쌌더니
+        크기 협상이 재귀했다. GeometryReader는 부모 제안을 그대로 소비하는데,
+        그 안의 <code>NSViewRepresentable</code>이 다시 크기를 되묻는 구조가 된다.</p>
+      <p class="fix">→ <code>onGeometryChange(for:of:action:)</code>로 교체.
+        레이아웃에 관여하지 않고 크기만 읽는다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">EXC_BAD_ACCESS · RefCounts::incrementSlow</div>
+      <h4>MTKView.draw는 메인 스레드 보장이 없다</h4>
+      <p><code>MainActor.assumeIsolated</code>는 이름 그대로 <strong>가정</strong>일 뿐 검사하지 않는다.
+        그 안에서 <code>@Observable</code> 엔진의 프로퍼티를 읽자 참조카운트 경쟁이 나
+        해제된 객체를 붙잡았다. 크래시 스택이 Swift 런타임의 retain 경로를 정확히 가리켰다.</p>
+      <p class="fix">→ 렌더 파라미터를 메인 액터에서 스냅샷해 락으로 보호된
+        <code>RenderState</code>에 넣고, <code>draw</code>는 그것과 <code>FrameStore</code>만 읽는
+        완전한 <code>nonisolated</code>로 만들었다.</p>
+    </div>
+  </div>
+
+  <div class="call cool">
+    <span class="lbl">두 건의 공통점</span>
+    <p>둘 다 <strong>컴파일러가 잡아주지 않는 계약 위반</strong>이었다. Swift 5 모드에서는
+      액터 격리가 경고조차 아니고, 레이아웃 재귀는 타입 시스템 밖의 일이다.
+      크래시 리포트의 스택을 끝까지 읽는 것 말고는 방법이 없었다.</p>
+  </div>
+
   <h3>가장 비쌌던 버그: 이중 정규화</h3>
   <p>깊이맵이 나오긴 나오는데, 가운데가 멀고 가장자리가 가까운 <strong>터널 모양</strong>이 나왔다.
     합성 입력이라 모델이 헷갈린 거라고 넘길 뻔했다. 그런데 Core ML과 대조해보니 상관계수가 <code>−0.34</code>였다.
@@ -561,6 +592,58 @@ float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">//
     포맷 코드 <code>1278226536</code>을 ASCII로 풀면 <code>"L00h"</code> — half다.</p>
   <p>고치자 <code>r = 1.00000</code>이 나왔다.
     <strong>검증 도구도 검증해야 한다</strong>는 걸 비싸게 배웠다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="model">
+  <h2><span class="num">07-1</span>왜 Depth Anything V2-small인가</h2>
+  <p class="dek">더 좋은 모델은 많다. 문제는 "좋다"의 정의다.</p>
+
+  <p>이 파이프라인은 <strong>Depth Anything V2-small을 쓴다</strong>
+    (<code>apple/coreml-depth-anything-v2-small</code>, Apache-2.0, ViT-S 24.8M).
+    선택 기준은 정확도 순위가 아니라 <strong>지연·라이선스·변환 리스크</strong>였다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>후보</th><th>성격</th><th>왜 안 골랐나 / 골랐나</th></tr></thead>
+      <tbody>
+        <tr class="lead">
+          <td>Depth Anything V2-small</td>
+          <td>상대 역깊이 · 24.8M</td>
+          <td class="note"><strong>채택.</strong> Apple이 Core ML 변환본을 직접 배포해 변환 리스크가 0.
+            M5에서 15.4 ms — 60 fps 예산에 들어가는 유일한 축</td>
+        </tr>
+        <tr>
+          <td>Depth Anything 3</td>
+          <td>단안+멀티뷰 통합 (2025-11)</td>
+          <td class="note">품질은 위. 다만 Core ML 변환을 직접 해야 하고
+            <code>metal-package-builder</code>까지 통과시켜야 한다. 속도가 부족해지면 그때 검토</td>
+        </tr>
+        <tr>
+          <td>DepthART (IJCAI 2025)</td>
+          <td>자기회귀 정제 · 생성형</td>
+          <td class="note">정확도는 인상적이지만 <strong>자기회귀라 한 장에 여러 번 순전파</strong>한다.
+            구조적으로 실시간과 상극이다</td>
+        </tr>
+        <tr>
+          <td>Apple Depth Pro</td>
+          <td>메트릭 + 초점거리 추정</td>
+          <td class="note">0.3초/장. 실시간 불가.
+            다만 <strong>정적 배경 앵커·교사 모델</strong>로는 최적이다 — 버리지 않았다</td>
+        </tr>
+        <tr>
+          <td>ZipDepth (2026)</td>
+          <td>경량 zero-shot · 6.1M</td>
+          <td class="note">속도가 더 필요해질 때의 카드</td>
+        </tr>
+      </tbody>
+      <caption>실시간 인터랙션에서는 "가장 정확한 모델"이 아니라 "16.7 ms 안에 끝나는 모델 중 가장 정확한 것"이 정답이다. 생성형·자기회귀 계열은 품질 상한이 높지만 프레임 예산 안에 들어오지 않는다.</caption>
+    </table>
+  </div>
+
+  <p>품질이 부족하면 모델을 바꾸기 전에 <a href="#budget">§09의 네 단계</a>를 먼저 소진한다.
+    도메인이 "웹캠 앞 상반신"으로 좁으므로, 같은 파라미터 수로 증류하는 쪽이
+    더 큰 모델을 가져오는 것보다 대개 이득이다.</p>
 </section>
 
 <!-- ─────────────────────────────────────── -->
