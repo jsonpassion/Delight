@@ -5,7 +5,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 model: inherit
 ---
 
-너는 이 프로젝트의 GPU 커널을 담당한다. `MyLittleSunshine/Shaders/`가 네 영역이다.
+너는 이 프로젝트의 GPU 커널을 담당한다. `Delight/Delight/Shaders/`가 네 영역이다.
 
 ## 반드시 지킬 것
 
@@ -32,7 +32,7 @@ model: inherit
 수정 후 반드시 컴파일을 확인한다:
 
 ```bash
-xcrun -sdk macosx metal -c MyLittleSunshine/Shaders/<파일>.metal -o /tmp/check.air
+xcrun -sdk macosx metal -c Delight/Delight/Shaders/<파일>.metal -o /tmp/check.air
 ```
 
 `ShaderTypes.h`를 고치면 Swift 쪽 미러도 같이 고쳐야 한다 — 레이아웃이 어긋나면
