@@ -10,6 +10,7 @@
 import Foundation
 import Metal
 import CoreMedia
+import AVFoundation
 import Observation
 import QuartzCore
 
@@ -43,6 +44,9 @@ final class RelightEngine {
     /// 깊이맵을 화면에 보여줄지. P1의 눈에 보이는 성과다.
     var showDepth = true
 
+    /// 거울상 프리뷰. 손 인터랙션은 거울이 자연스럽다. 송출에는 적용하지 않는다.
+    var isMirrored = true
+
     // MARK: 구성 요소
 
     let device: MTLDevice
@@ -75,6 +79,38 @@ final class RelightEngine {
         } else {
             NSLog("[Delight] 모델을 찾지 못함 — Tools/fetch_models.sh 를 실행하세요")
         }
+        NSLog("[Delight] 카메라 권한: %d (0=미결정 1=제한 2=거부 3=허용)",
+              AVCaptureDevice.authorizationStatus(for: .video).rawValue)
+
+        // 테스트 자동화: --autostart 로 실행하면 UI 클릭 없이 엔진을 돌리고
+        // 3초마다 상태를 로그로 남긴다. CLI에서 파이프라인 전체를 검증할 때 쓴다.
+        if ProcessInfo.processInfo.arguments.contains("--autostart") {
+            Task { @MainActor in
+                self.start()
+                // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
+                // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
+                let offsets: [Float] = [-0.3, 0.0, 0.4, 0.9, -0.15]
+                for i in 0..<10 {
+                    try? await Task.sleep(for: .seconds(3))
+                    self.lightRig.depthOffset = offsets[i % offsets.count]
+                    let (camera, depth) = self.frameStore.latest()
+                    let line = String(
+                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@",
+                        String(describing: self.status), self.stats.captureFPS,
+                        self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
+                        camera == nil ? "nil" : "OK", depth == nil ? "nil" : "OK")
+                    NSLog("[Delight] %@", line)
+                    // open(1)으로 실행되면 stderr를 받을 수 없으므로 파일에도 남긴다.
+                    if let data = (line + "\n").data(using: .utf8),
+                       let handle = FileHandle(forWritingAtPath: "/tmp/delight_status.log") {
+                        handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+                    } else {
+                        try? (line + "\n").write(toFile: "/tmp/delight_status.log",
+                                                  atomically: false, encoding: .utf8)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: 수명주기
@@ -94,7 +130,7 @@ final class RelightEngine {
             let queue = processingQueue
 
             capture.onFrame = { [weak self] frame in
-                store.publishCamera(frame.texture)
+                store.publishCamera(frame)
                 Task { @MainActor in self?.stats.recordCapture(at: frame.presentationTime) }
 
                 // 추론이 아직 돌고 있으면 이 프레임은 버린다.
@@ -108,12 +144,21 @@ final class RelightEngine {
                     Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
                 }
             }
-            try capture.start()
             self.capture = capture
             self.handTracker = HandTracker()
-            self.status = .running
+            Task { @MainActor in
+                do {
+                    try await capture.start()
+                    self.status = .running
+                    NSLog("[Delight] 캡처 시작됨")
+                } catch {
+                    self.status = .failed(error.localizedDescription)
+                    NSLog("[Delight] 캡처 시작 실패: %@", String(describing: error))
+                }
+            }
         } catch {
             self.status = .failed(error.localizedDescription)
+            NSLog("[Delight] 엔진 시작 실패: %@", String(describing: error))
         }
     }
 
@@ -124,21 +169,23 @@ final class RelightEngine {
     }
 }
 
-/// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 텍스처 보관소.
+/// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 프레임 보관소.
+/// CameraFrame 전체를 보관해야 한다 — MTLTexture만 저장하면 CVMetalTexture가
+/// 해제되면서 캐시가 IOSurface를 재활용해 화면이 검거나 찢어진다.
 nonisolated final class FrameStore: @unchecked Sendable {
     private let lock = NSLock()
-    private var camera: MTLTexture?
+    private var camera: CameraFrame?
     private var depth: MTLTexture?
 
-    func publishCamera(_ texture: MTLTexture) {
-        lock.lock(); camera = texture; lock.unlock()
+    func publishCamera(_ frame: CameraFrame) {
+        lock.lock(); camera = frame; lock.unlock()
     }
     func publishDepth(_ texture: MTLTexture) {
         lock.lock(); depth = texture; lock.unlock()
     }
     func latest() -> (camera: MTLTexture?, depth: MTLTexture?) {
         lock.lock(); defer { lock.unlock() }
-        return (camera, depth)
+        return (camera?.texture, depth)
     }
 }
 

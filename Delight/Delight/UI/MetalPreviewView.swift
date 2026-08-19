@@ -72,6 +72,7 @@ struct MetalPreviewView: NSViewRepresentable {
                 // 깊이가 아직 없으면 카메라만 꽉 채워 보여준다.
                 let effectiveSplit = (depth != nil && engine.showDepth) ? splitFraction : 1.0
                 var split = effectiveSplit
+                var mirrored: UInt32 = engine.isMirrored ? 1 : 0
 
                 if let encoder = commandBuffer.makeComputeCommandEncoder() {
                     encoder.setComputePipelineState(compositePSO)
@@ -79,6 +80,7 @@ struct MetalPreviewView: NSViewRepresentable {
                     encoder.setTexture(depth ?? source, index: 1)
                     encoder.setTexture(drawable.texture, index: 2)
                     encoder.setBytes(&split, length: MemoryLayout<Float>.size, index: 0)
+                    encoder.setBytes(&mirrored, length: MemoryLayout<UInt32>.size, index: 1)
                     encoder.dispatchThreads(
                         MTLSize(width: drawable.texture.width, height: drawable.texture.height, depth: 1),
                         threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))

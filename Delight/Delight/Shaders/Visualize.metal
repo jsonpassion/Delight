@@ -58,6 +58,7 @@ kernel void composite_split(texture2d<float, access::sample> camera [[texture(0)
                             texture2d<float, access::sample> depth  [[texture(1)]],
                             texture2d<float, access::write>  output [[texture(2)]],
                             constant float                  &splitFraction [[buffer(0)]],
+                            constant uint                   &mirrored      [[buffer(1)]],
                             uint2 gid [[thread_position_in_grid]])
 {
     const uint W = output.get_width(), H = output.get_height();
@@ -92,5 +93,8 @@ kernel void composite_split(texture2d<float, access::sample> camera [[texture(0)
         uv.y = (uv.y - 0.5) * scale + 0.5;
     }
 
+    // 거울상 프리뷰 — 사용자는 거울에 익숙하다. 손 왼쪽 = 화면 왼쪽.
+    // 송출(Syphon/CMIO)은 비반전이 정석이므로 프리뷰에서만 뒤집는다.
+    if (mirrored != 0) { uv.x = 1.0 - uv.x; }
     output.write(float4(chosen.sample(linearSampler, uv).rgb, 1.0), gid);
 }

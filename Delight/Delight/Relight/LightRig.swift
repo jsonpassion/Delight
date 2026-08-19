@@ -41,9 +41,11 @@ final class LightRig {
 
     /// 광원이 피사체 기준으로 얼마나 앞/뒤에 있는가. 음수 = 카메라 쪽(정면광).
     /// 이 범위가 "얼굴 앞에도, 뒤로도" 를 성립시킨다.
-    var depthOffset: Float = -0.15 {
-        didSet { depthOffset = min(max(depthOffset, Self.nearestOffset), Self.farthestOffset) }
-    }
+    ///
+    /// ⚠️ didSet 안에서 자기 자신을 클램프하면 안 된다 — @Observable 매크로가
+    /// 프로퍼티를 computed로 바꾸므로 재대입이 didSet을 무한 재귀시켜
+    /// 스택 오버플로로 크래시한다(실제 크래시 리포트로 확인). 클램프는 쓰는 쪽에서.
+    var depthOffset: Float = -0.15
     static let nearestOffset: Float = -0.35   // 카메라 바로 앞
     static let farthestOffset: Float =  0.90  // 피사체 한참 뒤 → 완전한 역광
 
@@ -100,8 +102,9 @@ final class LightRig {
             // 손이 카메라에 가까울수록(역깊이 큼) 광원을 앞으로 당긴다.
             // 손을 멀리 뻗으면 광원이 얼굴 뒤로 넘어가 역광이 된다.
             let t = 1 - min(max(handDepth, 0), 1)             // 0 = 가까움, 1 = 멂
-            depthOffset = Self.nearestOffset
-                        + t * (Self.farthestOffset - Self.nearestOffset)
+            depthOffset = min(max(Self.nearestOffset
+                        + t * (Self.farthestOffset - Self.nearestOffset),
+                        Self.nearestOffset), Self.farthestOffset)
         }
 
         let z = max(subjectDepth + depthOffset, 0.05)
