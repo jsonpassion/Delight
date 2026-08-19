@@ -50,8 +50,9 @@ final class RelightEngine {
     /// 재조명 결과를 보여줄지. 끄면 원본 카메라가 나와 전후 비교가 된다.
     var showRelit = true
 
-    /// 최신 핀치 상태. HUD 피드백용.
+    /// 최신 핀치 상태. HUD 피드백용. **관찰 가능한 상태는 메인 액터가 소유한다.**
     private(set) var pinch = PinchState()
+    private(set) var isHandVisible = false
 
     // MARK: 구성 요소
 
@@ -59,6 +60,7 @@ final class RelightEngine {
     private(set) var capture: CameraCapture?
     private(set) var depthPipeline: DepthPipeline?
     private(set) var handTracker: HandTracker?
+    private(set) var personMatte: PersonMatte?
 
     /// 렌더러가 읽어 가는 최신 결과.
     let frameStore = FrameStore()
@@ -67,6 +69,9 @@ final class RelightEngine {
     private let inFlight = InFlightGate()
     /// 손 추적은 깊이 추론과 독립적으로 흐른다. 서로 기다리게 하면 둘 다 느려진다.
     private let handInFlight = InFlightGate()
+    /// 세그멘테이션도 마찬가지. 실루엣은 천천히 변하므로 15Hz로 충분하다.
+    private let matteInFlight = InFlightGate()
+    private let matteQueue = DispatchQueue(label: "delight.matte", qos: .userInitiated)
 
     init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -109,17 +114,22 @@ final class RelightEngine {
                                                               0.5 + 0.3 * sin(angle)))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
                         camera == nil ? "nil" : "OK",
                         depth == nil ? "nil" : "OK",
                         relit == nil ? "nil" : "OK",
-                        (self.handTracker?.isHandVisible ?? false) ? "보임" : "없음",
+                        self.personMatte?.latestTexture() == nil ? "nil" : "OK",
+                        self.isHandVisible ? "보임" : "없음",
                         self.pinch.isPinching ? "잡음" : "놓음",
                         self.pinch.normalizedDepth,
                         self.lightRig.active?.position.z ?? 0)
                     NSLog("[Delight] %@", line)
+                    if i == 4, let pipeline = self.depthPipeline {
+                        let ok = pipeline.dumpRelit(to: "/tmp/delight_relit.png")
+                        NSLog("[Delight] 재조명 결과 덤프: %@", ok ? "OK" : "실패")
+                    }
                     // open(1)으로 실행되면 stderr를 받을 수 없으므로 파일에도 남긴다.
                     if let data = (line + "\n").data(using: .utf8),
                        let handle = FileHandle(forWritingAtPath: "/tmp/delight_status.log") {
@@ -140,15 +150,24 @@ final class RelightEngine {
         do {
             let pipeline = try DepthPipeline(
                 device: device,
-                outputWidth: DepthPipeline.modelWidth,
-                outputHeight: DepthPipeline.modelHeight)
+                outputWidth: Self.outputWidth,
+                outputHeight: Self.outputHeight)
             self.depthPipeline = pipeline
 
             let capture = try CameraCapture(device: device)
             let store = frameStore
             let gate = inFlight
             let handGate = handInFlight
+            let matteGate = matteInFlight
             let queue = processingQueue
+            let matteWork = matteQueue
+            // 콜백이 값을 캡처하므로 **여기서 먼저** 만들어야 한다.
+            // 나중에 만들면 콜백은 nil을 붙잡은 채로 남는다.
+            let matteProvider = PersonMatte(device: device)
+            self.personMatte = matteProvider
+            if matteProvider == nil {
+                NSLog("[Delight] 인물 세그멘테이션 초기화 실패 — 깊이 기반 근사 매트로 폴백")
+            }
 
             capture.onFrame = { [weak self] frame in
                 store.publishCamera(frame)
@@ -157,6 +176,15 @@ final class RelightEngine {
                 // 추론이 아직 돌고 있으면 이 프레임은 버린다.
                 guard gate.tryEnter() else { return }
 
+                // 인물 세그멘테이션 — 15Hz(PersonMatte가 스스로 제한한다).
+                // 메인 액터를 거치지 않는다. 프레임마다 Task를 만들면 UI 트랜잭션과 경쟁한다.
+                if let matte = matteProvider, matteGate.tryEnter() {
+                    matteWork.async {
+                        matte.process(pixelBuffer: frame.pixelBuffer)
+                        matteGate.leave()
+                    }
+                }
+
                 // 손 추적 — 깊이 추론과 병렬로 돈다.
                 if handGate.tryEnter() {
                     Task { @MainActor [weak self] in
@@ -164,12 +192,13 @@ final class RelightEngine {
                               let tracker = self.handTracker else {
                             handGate.leave(); return
                         }
-                        await tracker.process(pixelBuffer: frame.pixelBuffer) { point in
+                        let result = await tracker.process(pixelBuffer: frame.pixelBuffer) { point in
                             // 핀치 지점의 깊이. 손도 프레임 안에 있으므로 별도 센서가 필요 없다.
                             pipeline.sampleInverseDepth(
                                 atNormalized: SIMD2<Float>(Float(point.x), Float(point.y))) ?? 0.5
                         }
-                        self.applyPinch(tracker.pinch)
+                        self.isHandVisible = tracker.isHandVisible
+                        if let result { self.applyPinch(result) }
                         handGate.leave()
                     }
                 }
@@ -177,9 +206,12 @@ final class RelightEngine {
                 // 광원 상태는 메인 액터가 소유하므로 값 타입 스냅샷으로 건넨다.
                 Task { @MainActor in
                     let lighting = self?.currentLighting()
+                    let matteTexture = self?.personMatte?.latestTexture()
                     queue.async {
                         let start = CACurrentMediaTime()
-                        let result = pipeline.process(source: frame.texture, lighting: lighting)
+                        let result = pipeline.process(source: frame.texture,
+                                                      lighting: lighting,
+                                                      segmentation: matteTexture)
                         let elapsed = (CACurrentMediaTime() - start) * 1000
                         if let result {
                             store.publishResult(depth: result.depth, relit: result.relit)
@@ -217,6 +249,9 @@ final class RelightEngine {
     func currentLighting() -> SunUniforms {
         var uniforms = SunUniforms()
         lightRig.fill(&uniforms)
+        // 초점거리는 출력 해상도와 짝이어야 한다. 빠뜨리면 기본값이 들어가 원근이 틀어진다.
+        uniforms.fx = calibration.fx
+        uniforms.fy = calibration.fy
         return uniforms
     }
 
@@ -227,24 +262,40 @@ final class RelightEngine {
     /// (마우스는 사용자가 이미 뒤집힌 화면을 보고 찍으므로 보정이 필요하다 — ContentView 참조)
     func applyPinch(_ pinch: PinchState) {
         self.pinch = pinch
-        guard pinch.isPinching else { return }
+        guard pinch.isPinching else {
+            lightRig.releaseGrab()
+            return
+        }
         moveLight(toNormalized: SIMD2<Float>(Float(pinch.position.x), Float(pinch.position.y)),
-                  handDepth: pinch.normalizedDepth)
+                  handDepth: pinch.normalizedDepth,
+                  isGrabbing: true,
+                  handScale: pinch.handScale)
     }
 
     /// 프리뷰 위 정규화 좌표로 광원을 옮긴다. 마우스와 핀치가 같은 경로를 쓴다.
     /// - Parameter normalized: 좌상단 원점 0…1. 거울상 보정은 호출부에서 끝낸 값이어야 한다.
-    func moveLight(toNormalized normalized: SIMD2<Float>, handDepth: Float? = nil) {
+    func moveLight(toNormalized normalized: SIMD2<Float>,
+                   handDepth: Float? = nil,
+                   isGrabbing: Bool = false,
+                   handScale: Float = 0) {
         lightRig.place(normalized: normalized,
                        handDepth: handDepth,
                        calibration: calibration,
-                       pixelSize: SIMD2<Float>(Float(DepthPipeline.modelWidth),
-                                               Float(DepthPipeline.modelHeight)))
+                       pixelSize: SIMD2<Float>(Float(Self.outputWidth),
+                                               Float(Self.outputHeight)),
+                       affine: SIMD2<Float>(SunUniforms().affineA, SunUniforms().affineB),
+                       isGrabbing: isGrabbing,
+                       handScale: handScale)
     }
 
+    /// 리라이팅 출력 해상도. 깊이 해상도(518×392)의 3배다.
+    /// 깊이맵은 저해상도로 두고 조명만 고해상도로 계산한다 —
+    /// 깊이는 저주파라 확대해도 티가 안 나지만, 최종 화면은 카메라 해상도여야 한다.
+    static let outputWidth = DepthPipeline.modelWidth * 3      // 1554
+    static let outputHeight = DepthPipeline.modelHeight * 3    // 1176
+
     /// 초점거리 추정치. macOS는 내부파라미터를 주지 않아 추정값을 쓴다.
-    private(set) var calibration = CameraCalibration(width: DepthPipeline.modelWidth,
-                                                     height: DepthPipeline.modelHeight)
+    private(set) var calibration = CameraCalibration(width: outputWidth, height: outputHeight)
 }
 
 /// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 프레임 보관소.

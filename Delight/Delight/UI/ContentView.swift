@@ -68,7 +68,7 @@ struct ContentView: View {
     /// 핀치 상태 피드백. 손을 놓쳤는지, 잡았는지, 얼마나 깊은지 한눈에 보인다.
     private var pinchIndicator: some View {
         let pinch = engine.pinch
-        let tracking = engine.handTracker?.isHandVisible ?? false
+        let tracking = engine.isHandVisible
         return HStack(spacing: 10) {
             Image(systemName: pinch.isPinching ? "hand.pinch.fill" : "hand.raised")
                 .foregroundStyle(pinch.isPinching ? .orange : (tracking ? .primary : .secondary))

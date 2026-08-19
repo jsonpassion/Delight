@@ -36,6 +36,7 @@ kernel void build_gbuffer(device const float   *depth    [[buffer(0)]],
                           texture2d<float, access::write>  position [[texture(1)]],
                           texture2d<float, access::write>  normal   [[texture(2)]],
                           texture2d<float, access::write>  matte    [[texture(3)]],
+                          texture2d<float, access::sample>  segmentation [[texture(4)]],
                           uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= u.depthWidth || gid.y >= u.depthHeight) { return; }
@@ -90,9 +91,16 @@ kernel void build_gbuffer(device const float   *depth    [[buffer(0)]],
     position.write(float4(c, 1.0), gid);
     normal.write(float4(n * 0.5 + 0.5, 1.0), gid);
 
-    // 피사체 마스크를 깊이에서 근사한다. 상대 역깊이라 가까운 픽셀이 곧 사람이다.
+    // 피사체 마스크. Vision 세그멘테이션이 있으면 그것을 쓰고, 없으면 깊이로 근사한다.
     // 레이마칭 두께 프라이어와 스펙큘러 마스크에 쓰인다.
-    // TODO(P4): Vision GeneratePersonSegmentationRequest로 교체하면 실루엣이 정확해진다.
-    float inv = sampleInverseDepth(depth, u, p);
-    matte.write(float4(smoothstep(0.35, 0.60, inv), 0, 0, 1), gid);
+    float coverage;
+    if (u.hasSegmentation != 0) {
+        constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+        float2 uv = (float2(gid) + 0.5) / float2(u.depthWidth, u.depthHeight);
+        coverage = segmentation.sample(linearSampler, uv).r;
+    } else {
+        // 폴백: 상대 역깊이라 가까운 픽셀이 곧 사람이다. 실루엣이 뭉개지는 대신 항상 동작한다.
+        coverage = smoothstep(0.35, 0.60, sampleInverseDepth(depth, u, p));
+    }
+    matte.write(float4(coverage, 0, 0, 1), gid);
 }

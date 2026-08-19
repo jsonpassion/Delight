@@ -10,6 +10,8 @@
 import Metal
 import Foundation
 import os
+import CoreGraphics
+import ImageIO
 
 enum DepthPipelineError: LocalizedError {
     case modelNotFound
@@ -55,6 +57,7 @@ nonisolated final class DepthPipeline {
     private let visualizePSO: any MTLComputePipelineState
     private let gbufferPSO: any MTLComputePipelineState
     private let relightPSO: any MTLComputePipelineState
+    private let ambientOcclusionPSO: any MTLComputePipelineState
     private let mlPSO: any MTL4MachineLearningPipelineState
     private let intermediatesHeap: MTLHeap
 
@@ -106,6 +109,7 @@ nonisolated final class DepthPipeline {
         self.visualizePSO  = try computePipeline("visualize_depth")
         self.gbufferPSO    = try computePipeline("build_gbuffer")
         self.relightPSO    = try computePipeline("relight")
+        self.ambientOcclusionPSO = try computePipeline("compute_ao")
 
         // ML 파이프라인
         let mlLibrary = try device.makeLibrary(URL: packageURL)
@@ -154,7 +158,9 @@ nonisolated final class DepthPipeline {
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: outputWidth, height: outputHeight, mipmapped: false)
         textureDescriptor.usage = [.shaderRead, .shaderWrite]
-        textureDescriptor.storageMode = .private
+        // .shared — 진단용 PNG 덤프에 CPU 읽기가 필요하다.
+        // 통합 메모리라 비용이 거의 없다(깊이 텐서에서 이미 검증).
+        textureDescriptor.storageMode = .shared
         for _ in 0..<3 {
             guard let depthTexture = device.makeTexture(descriptor: textureDescriptor),
                   let relitTexture = device.makeTexture(descriptor: textureDescriptor) else {
@@ -179,6 +185,7 @@ nonisolated final class DepthPipeline {
         self.normalTexture   = try makeGBuffer(.rgba16Float)
         self.matteTexture    = try makeGBuffer(.r8Unorm)
         self.ambientOcclusionTexture = try makeGBuffer(.r8Unorm)
+        // AO 텍스처는 셰이더가 쓰기도 하고 읽기도 한다(makeGBuffer가 둘 다 준다).
 
         let argumentDescriptor = MTL4ArgumentTableDescriptor()
         argumentDescriptor.maxBufferBindCount = 8
@@ -229,7 +236,8 @@ nonisolated final class DepthPipeline {
     /// - Parameter lighting: 메인 액터의 LightRig가 채운 스냅샷. 값 타입이라 그대로 건너온다.
     /// - Returns: 깊이 시각화와 재조명 결과.
     func process(source: MTLTexture,
-                 lighting: SunUniforms? = nil) -> (depth: MTLTexture, relit: MTLTexture)? {
+                 lighting: SunUniforms? = nil,
+                 segmentation: MTLTexture? = nil) -> (depth: MTLTexture, relit: MTLTexture)? {
         if let lighting {
             // 해상도·텐서 레이아웃은 파이프라인이 소유한다. 조명 쪽 값만 받아들인다.
             var merged = lighting
@@ -242,6 +250,7 @@ nonisolated final class DepthPipeline {
             merged.cy = uniforms.cy
             uniforms = merged
         }
+        uniforms.hasSegmentation = segmentation != nil ? 1 : 0
         uniformBuffer.contents().copyMemory(
             from: &uniforms, byteCount: MemoryLayout<SunUniforms>.stride)
 
@@ -252,6 +261,7 @@ nonisolated final class DepthPipeline {
         // 카메라 텍스처는 CVMetalTextureCache가 돌려쓰므로 매 프레임 레지던시를 갱신한다.
         frameResidency.removeAllAllocations()
         frameResidency.addAllocation(source)
+        if let segmentation { frameResidency.addAllocation(segmentation) }
         frameResidency.commit()
 
         allocator.reset()
@@ -306,8 +316,27 @@ nonisolated final class DepthPipeline {
             argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
             argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
             argumentTable.setTexture(matteTexture.gpuResourceID, index: 3)
+            // 세그멘테이션이 없으면 아무 텍스처나 바인딩해 둔다 — 셰이더가 플래그로 건너뛴다.
+            argumentTable.setTexture((segmentation ?? matteTexture).gpuResourceID, index: 4)
             encoder.setArgumentTable(argumentTable)
             encoder.setComputePipelineState(gbufferPSO)
+            encoder.dispatchThreads(
+                threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
+                            visibilityOptions: .device)
+            encoder.endEncoding()
+        }
+
+        // [C4] 앰비언트 오클루전 — 턱밑·목·코 옆 접촉 그늘.
+        // G버퍼 해상도에서 계산한다. 저주파 신호라 풀 해상도가 필요 없다.
+        if uniforms.enableAO != 0, let encoder = commandBuffer.makeComputeCommandEncoder() {
+            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 0)
+            argumentTable.setTexture(positionTexture.gpuResourceID, index: 0)
+            argumentTable.setTexture(normalTexture.gpuResourceID, index: 1)
+            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 2)
+            encoder.setArgumentTable(argumentTable)
+            encoder.setComputePipelineState(ambientOcclusionPSO)
             encoder.dispatchThreads(
                 threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
@@ -342,6 +371,30 @@ nonisolated final class DepthPipeline {
         guard event.wait(untilSignaledValue: signalValue, timeoutMS: 2000) else { return nil }
 
         return (depth: target, relit: relitTarget)
+    }
+
+    /// 최신 재조명 결과를 PNG로 저장한다. 화질 확인용 진단 경로.
+    func dumpRelit(to path: String) -> Bool {
+        let index = (writeIndex + relitTextures.count - 1) % relitTextures.count
+        let texture = relitTextures[index]
+        guard texture.storageMode == .shared else { return false }
+
+        let width = texture.width, height = texture.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        texture.getBytes(&pixels, bytesPerRow: width * 4,
+                         from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+
+        guard let context = CGContext(data: &pixels, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage(),
+              let destination = CGImageDestinationCreateWithURL(
+                URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)
+        else { return false }
+
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination)
     }
 
     // MARK: 깊이 샘플링

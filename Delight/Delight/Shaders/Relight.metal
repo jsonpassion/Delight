@@ -25,6 +25,20 @@ constant float kSkinF0 = 0.028;
 
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+/// 카메라 텍스처는 sRGB로 인코딩되어 있다. 조명은 **선형 공간에서** 더해야 한다.
+/// 이 변환을 빼면 밝기가 뜨고 색이 바래 "카메라 질감"이 사라진다.
+/// 텍스처를 _srgb 포맷으로 만들지 않고 셰이더에서 처리하는 이유는,
+/// 같은 텍스처를 전처리가 0-255 sRGB 원본으로 읽어야 하기 때문이다(모델이 그렇게 학습됨).
+inline float3 srgbToLinear(float3 c)
+{
+    return select(c / 12.92, pow((c + 0.055) / 1.055, 2.4), c > 0.04045);
+}
+inline float3 linearToSrgb(float3 c)
+{
+    c = max(c, 0.0);
+    return select(c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055, c > 0.0031308);
+}
+
 /// 뷰공간 점을 정규화 화면좌표로 투영한다.
 inline float2 projectToScreen(float3 p, constant SunUniforms &u)
 {
@@ -104,17 +118,34 @@ inline float traceShadow(float3 origin,
     return 1.0;
 }
 
-/// 실루엣 근접도. 깊이 기울기가 큰 곳 = 얇은 곳(귀·머리카락·어깨선).
-inline float estimateThinness(texture2d<float, access::sample> positionTex,
-                              float2 uv, constant SunUniforms &u)
+/// 깊이 기울기. 얇음 판정과 실루엣 절벽 판정에 함께 쓴다.
+inline float depthGradient(texture2d<float, access::sample> positionTex,
+                           float2 uv, constant SunUniforms &u)
 {
     constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
     float2 texel = 1.0 / float2(u.outputWidth, u.outputHeight);
     float zc = positionTex.sample(linearSampler, uv).z;
     float zx = positionTex.sample(linearSampler, uv + float2(texel.x, 0)).z;
     float zy = positionTex.sample(linearSampler, uv + float2(0, texel.y)).z;
-    float gradient = length(float2(zx - zc, zy - zc));
-    return saturate(gradient * 40.0);
+    return length(float2(zx - zc, zy - zc));
+}
+
+/// 얇은 부위(귀·머리카락) 추정 — **대역 통과**다.
+///
+/// 처음엔 기울기가 클수록 얇다고 봤는데, 그러면 실루엣 경계가 최대값을 받아
+/// 얼굴과 손 둘레에 흰 후광이 생겼다(실측 확인).
+/// 실루엣은 얇은 게 아니라 **끊긴** 것이다. 완만한 기울기만 얇음으로 친다.
+inline float estimateThinness(float gradient)
+{
+    float rising  = smoothstep(0.002, 0.020, gradient);   // 평평한 면은 얇지 않다
+    float falling = 1.0 - smoothstep(0.045, 0.110, gradient); // 절벽은 얇음이 아니다
+    return rising * falling;
+}
+
+/// 실루엣 절벽에서 1에 가까워진다. 림라이트를 억제하는 데 쓴다.
+inline float silhouetteCliff(float gradient)
+{
+    return smoothstep(0.045, 0.110, gradient);
 }
 
 kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
@@ -136,11 +167,18 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
     float3 normal   = normalize(normalTex.sample(linearSampler, uv).xyz * 2.0 - 1.0);
     float  matte    = matteTex.sample(linearSampler, uv).r;
     float  ao       = u.enableAO ? aoTex.sample(linearSampler, uv).r : 1.0;
-    float  thinness = estimateThinness(positionTex, uv, u);
+    float  gradient = depthGradient(positionTex, uv, u);
+    float  thinness = estimateThinness(gradient);
+    float  cliff    = silhouetteCliff(gradient);
 
-    // pseudo-albedo: 저주파 밝기를 나눠 텍스처만 남긴다(Retinex 근사).
-    float sourceLuma = max(luminance(source), 1e-3);
-    float3 albedo = source / pow(sourceLuma, 0.7);
+    // 원본을 선형 공간으로. 여기서부터 모든 조명 연산은 선형이다.
+    float3 linearSource = srgbToLinear(source);
+
+    // albedo 프록시는 원본 그대로다.
+    // 이전에는 루마로 나눠 "de-lighting"을 시도했는데, 픽셀별 나눗셈이라
+    // 밝기 정보를 통째로 날려 텍스처가 평평해지고 색이 떴다.
+    // 가산 조명에서는 밝은 표면이 더 많이 반사하는 게 물리적으로 옳다.
+    float3 albedo = linearSource;
 
     float3 viewDirection = normalize(-position);
     float3 accumulated = float3(0.0);
@@ -192,7 +230,10 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
         if (backness > 0.0) {
             // 림라이트: 실루엣에서 빛이 테두리를 훑는다. 그림자에 가려지지 않는다 —
             // 실루엣 픽셀은 정의상 광선이 곧바로 화면을 벗어나기 때문이다.
+            // 절벽에서는 노멀이 신뢰할 수 없다(5-tap도 불연속을 완전히 못 막는다).
+            // 억제하지 않으면 실루엣 전체가 흰 테두리로 타버린다.
             float rim = pow(1.0 - saturate(dot(normal, viewDirection)), u.rimPower);
+            rim *= (1.0 - cliff);
             float3 rimLight = rim * backness * matte * light.color * light.intensity * attenuation;
 
             // 투과 산란: 얇은 부위(귀·머리카락)로 빛이 새어 나온다.
@@ -219,11 +260,70 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
         }
     }
 
-    float3 result = source * mix(1.0, ao, 0.6) + accumulated + glow;
+    float3 result = linearSource * mix(1.0, ao, 0.6) + accumulated + glow;
 
-    // ACES 근사 톤매핑 — 가산 조명이라 클리핑 방지는 선택이 아니다.
-    const float A = 2.51, B = 0.03, C = 2.43, D = 0.59, E = 0.14;
-    result = saturate((result * (A * result + B)) / (result * (C * result + D) + E));
+    // 소프트 클립 — 1 이하는 원본 그대로 통과시키고 넘치는 부분만 눌러 담는다.
+    // ACES를 무조건 걸면 조명이 꺼져 있어도 원본이 어두워져 카메라 질감을 잃는다.
+    float peak = luminance(result);
+    if (peak > 1.0) { result /= (1.0 + (peak - 1.0)); }
 
-    outputTex.write(float4(result, 1.0), gid);
+    outputTex.write(float4(linearToSrgb(result), 1.0), gid);
+}
+
+/// 화면공간 앰비언트 오클루전.
+/// 턱밑·목·코 옆의 접촉 그늘을 만든다. 광원과 무관하게 항상 입체감을 올린다.
+/// 반구 샘플링을 뷰공간에서 하고 화면에 재투영해 깊이를 비교하는,
+/// 레이마칭 그림자와 같은 원리의 축소판이다.
+kernel void compute_ao(texture2d<float, access::sample> positionTex [[texture(0)]],
+                       texture2d<float, access::sample> normalTex   [[texture(1)]],
+                       texture2d<float, access::write>  output      [[texture(2)]],
+                       constant SunUniforms            &u           [[buffer(0)]],
+                       uint2 gid [[thread_position_in_grid]])
+{
+    const uint W = output.get_width(), H = output.get_height();
+    if (gid.x >= W || gid.y >= H) { return; }
+
+    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+    float2 uv = (float2(gid) + 0.5) / float2(W, H);
+
+    float3 position = positionTex.sample(linearSampler, uv).xyz;
+    if (position.z <= 1e-4) { output.write(float4(1.0), gid); return; }
+    float3 normal = normalize(normalTex.sample(linearSampler, uv).xyz * 2.0 - 1.0);
+
+    // 반경은 미터 단위. 얼굴 규모(0.1m)에서 접촉 그늘이 가장 자연스럽다.
+    const float radius = 0.10;
+    const uint samples = 12;
+    float jitter = interleavedGradientNoise(gid);
+
+    float3 tangent = normalize(abs(normal.x) < 0.9 ? cross(normal, float3(1, 0, 0))
+                                                   : cross(normal, float3(0, 1, 0)));
+    float3 bitangent = cross(normal, tangent);
+
+    float occlusion = 0.0;
+    for (uint i = 0; i < samples; ++i) {
+        float angle = (float(i) + jitter) / float(samples) * 2.0 * kPI;
+        float radial = sqrt((float(i) + 0.5) / float(samples)) * radius;
+
+        // 반구 안쪽으로 살짝 띄운 샘플점
+        float3 offset = (tangent * cos(angle) + bitangent * sin(angle)) * radial
+                      + normal * radial * 0.3;
+        float3 samplePoint = position + offset;
+
+        float2 sampleUV = projectToScreen(samplePoint, u);
+        if (any(sampleUV < 0.0) || any(sampleUV > 1.0)) { continue; }
+
+        float sceneZ = positionTex.sample(linearSampler, sampleUV).z;
+        if (sceneZ <= 1e-4) { continue; }
+
+        // 씬이 샘플점보다 앞에 있으면 그만큼 가려진 것이다.
+        float delta = samplePoint.z - sceneZ;
+        // 상한을 둔다. 실루엣 너머 배경은 "가림"이 아니라 다른 물체다 —
+        // 제한하지 않으면 얼굴 둘레가 검은 띠로 둘러싸인다.
+        if (delta > 0.002 && delta < radius * 2.0) {
+            occlusion += 1.0 / (1.0 + delta / radius);
+        }
+    }
+
+    float ao = saturate(1.0 - occlusion / float(samples) * 1.6);
+    output.write(float4(ao, ao, ao, 1.0), gid);
 }
