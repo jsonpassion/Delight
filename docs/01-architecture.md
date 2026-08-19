@@ -261,6 +261,51 @@ thickness(uv) = personMatte(uv) > 0.5
 
 ---
 
+## 7-1. 역광 — 빛이 피사체 뒤로 갔을 때
+
+광원은 피사체 **앞뒤 어느 쪽에도** 갈 수 있어야 한다. 그래서 z를 절대 좌표가 아니라
+피사체 기준 상대값으로 잡는다. 절대 좌표면 사람이 조금만 움직여도 조명이 얼굴 속으로 들어간다.
+
+```swift
+z = subjectDepth + depthOffset          // depthOffset ∈ [-0.35, +0.90] m
+// 음수 → 정면광,  양수 → 역광
+```
+
+광원이 뒤로 가면 네 가지가 **동시에** 일어나야 실제처럼 보인다.
+
+| | 무엇 | 어떻게 |
+|---|---|---|
+| ① | 앞면이 어두워진다 | 레이마칭이 자연히 처리 — 광선이 머리 내부를 통과하며 두께 창 안에서 가림 판정 |
+| ② | 실루엣이 빛난다 | 림라이트. 실루엣 픽셀은 광선이 곧바로 화면을 벗어나 그림자에 안 걸린다 |
+| ③ | 귀·머리카락이 비친다 | 투과 산란(Frostbite 근사). "얇음"은 깊이 기울기로 추정 |
+| ④ | 광원 글로우가 가려진다 | 씬 깊이로 테스트 — 이게 "뒤로 넘겼다"를 눈으로 증명한다 |
+
+```metal
+// 감쌈 확산 — 피부는 표면하 산란 때문에 명암 경계가 부드럽다
+float wrapped = saturate((dot(N, L) + wrapDiffuse) / (1.0 + wrapDiffuse));
+
+float backness = saturate(-dot(L, V));           // 1 = 완전한 역광
+if (backness > 0.0) {
+    float rim = pow(1.0 - saturate(dot(N, V)), rimPower);
+    accumulated += rim * backness * matte * lightColor * intensity * atten;
+
+    float3 scatterDir = normalize(-L + N * 0.25);
+    float  scatter    = pow(saturate(dot(V, scatterDir)), 4.0);
+    accumulated += scatter * thinness * matte * translucency * lightColor * intensity * atten;
+}
+
+// 광원 글로우는 씬 깊이로 테스트해 머리 뒤로 가면 사라진다
+bool visible = (light.position.z < sceneZ + bias) || sceneZ <= 1e-4;
+```
+
+**스펙큘러는 `dot(N,L) > 0`일 때만 계산한다.** 역광에서 정면 스펙큘러가 뜨면 즉시 가짜티가 난다.
+
+### 부드러운 그림자
+광원 반경만큼 목표점을 원뿔 지터링한다. 샘플은 한 개지만, 가림물에서 멀어질수록
+그림자가 부드러워지는 **실제 페넘브라 거동**이 나온다. 노이즈는 시간 누적(P6)이 정리한다.
+
+---
+
 ## 8. 손 인터랙션 — 핀치로 3D 조명 잡기
 
 ### 핀치 검출

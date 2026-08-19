@@ -1,13 +1,17 @@
 //
 //  RelightEngine.swift
-//  파이프라인 오케스트레이터. 각 스테이지는 프로토콜 뒤에 있으므로
+//  파이프라인 오케스트레이터. 각 스테이지는 프로토콜/클래스 뒤에 있으므로
 //  하나가 실패해도 나머지가 산다. (docs/01-architecture.md §10)
+//
+//  레이트 분리: 캡처 30/60Hz, 깊이 추론 ~30Hz(15.4ms), 렌더 60Hz.
+//  추론이 밀리면 프레임을 버린다 — 조명이 손을 늦게 따라오는 것보다 낫다.
 //
 
 import Foundation
 import Metal
 import CoreMedia
 import Observation
+import QuartzCore
 
 @Observable
 @MainActor
@@ -27,8 +31,8 @@ final class RelightEngine {
     /// 씬에 놓인 광원들. 다중 광원 확장을 위해 처음부터 배열이다.
     var lightRig = LightRig()
 
-    /// 손 인식이 실패해도 데모가 죽지 않도록 하는 폴백. P2에서 반드시 살려둔다.
-    var inputMode: InputMode = .hand
+    /// 손 인식이 실패해도 데모가 죽지 않도록 하는 폴백. 항상 살려둔다.
+    var inputMode: InputMode = .mouse
 
     enum InputMode: String, CaseIterable, Identifiable {
         case hand = "손"
@@ -36,13 +40,21 @@ final class RelightEngine {
         var id: String { rawValue }
     }
 
+    /// 깊이맵을 화면에 보여줄지. P1의 눈에 보이는 성과다.
+    var showDepth = true
+
     // MARK: 구성 요소
 
     let device: MTLDevice
     private(set) var capture: CameraCapture?
-    private(set) var depthProvider: (any DepthProvider)?
+    private(set) var depthPipeline: DepthPipeline?
     private(set) var handTracker: HandTracker?
-    private(set) var sinks: [any FrameSink] = []
+
+    /// 렌더러가 읽어 가는 최신 결과.
+    let frameStore = FrameStore()
+
+    private let processingQueue = DispatchQueue(label: "delight.depth", qos: .userInitiated)
+    private let inFlight = InFlightGate()
 
     init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -56,13 +68,34 @@ final class RelightEngine {
     func start() {
         guard status != .running else { return }
         do {
+            let pipeline = try DepthPipeline(
+                device: device,
+                outputWidth: DepthPipeline.modelWidth,
+                outputHeight: DepthPipeline.modelHeight)
+            self.depthPipeline = pipeline
+
             let capture = try CameraCapture(device: device)
+            let store = frameStore
+            let gate = inFlight
+            let queue = processingQueue
+
             capture.onFrame = { [weak self] frame in
-                Task { @MainActor in self?.process(frame) }
+                store.publishCamera(frame.texture)
+                Task { @MainActor in self?.stats.recordCapture(at: frame.presentationTime) }
+
+                // 추론이 아직 돌고 있으면 이 프레임은 버린다.
+                guard gate.tryEnter() else { return }
+                queue.async {
+                    let start = CACurrentMediaTime()
+                    let result = pipeline.process(source: frame.texture)
+                    let elapsed = (CACurrentMediaTime() - start) * 1000
+                    if let result { store.publishDepth(result) }
+                    gate.leave()
+                    Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
+                }
             }
             try capture.start()
             self.capture = capture
-
             self.handTracker = HandTracker()
             self.status = .running
         } catch {
@@ -75,38 +108,68 @@ final class RelightEngine {
         capture = nil
         status = .idle
     }
+}
 
-    // MARK: 프레임 처리
+/// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 텍스처 보관소.
+nonisolated final class FrameStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var camera: MTLTexture?
+    private var depth: MTLTexture?
 
-    private func process(_ frame: CameraFrame) {
-        stats.record(captureAt: frame.presentationTime)
-
-        // P1: 프리뷰까지. P2 이후 깊이 → 지오메트리 → 리라이팅이 여기에 붙는다.
-        // 전체 흐름은 docs/01-architecture.md §1 참조.
-        for sink in sinks {
-            sink.submit(frame.texture, pts: frame.presentationTime)
-        }
+    func publishCamera(_ texture: MTLTexture) {
+        lock.lock(); camera = texture; lock.unlock()
     }
+    func publishDepth(_ texture: MTLTexture) {
+        lock.lock(); depth = texture; lock.unlock()
+    }
+    func latest() -> (camera: MTLTexture?, depth: MTLTexture?) {
+        lock.lock(); defer { lock.unlock() }
+        return (camera, depth)
+    }
+}
 
-    func attach(sink: any FrameSink) {
-        sinks.append(sink)
+/// 추론이 진행 중이면 새 프레임을 버리기 위한 게이트.
+nonisolated final class InFlightGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busy = false
+
+    func tryEnter() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if busy { return false }
+        busy = true
+        return true
+    }
+    func leave() {
+        lock.lock(); busy = false; lock.unlock()
     }
 }
 
 /// 프레임 타이밍 통계. HUD에 그대로 표시한다.
 struct FrameStats {
-    private(set) var fps: Double = 0
+    private(set) var captureFPS: Double = 0
+    private(set) var depthMilliseconds: Double = 0
+    private(set) var depthFPS: Double = 0
     private(set) var frameCount: Int = 0
-    private var lastTime: CMTime = .zero
-    private var accumulated: Double = 0
 
-    mutating func record(captureAt time: CMTime) {
+    private var lastCapture: CMTime = .zero
+    private var smoothedInterval: Double = 0
+
+    mutating func recordCapture(at time: CMTime) {
         frameCount += 1
-        if lastTime != .zero {
-            let dt = (time - lastTime).seconds
-            if dt > 0 { accumulated = accumulated * 0.9 + dt * 0.1 }
-            if accumulated > 0 { fps = 1.0 / accumulated }
+        if lastCapture != .zero {
+            let dt = (time - lastCapture).seconds
+            if dt > 0 {
+                smoothedInterval = smoothedInterval == 0 ? dt : smoothedInterval * 0.9 + dt * 0.1
+                captureFPS = 1.0 / smoothedInterval
+            }
         }
-        lastTime = time
+        lastCapture = time
+    }
+
+    mutating func recordDepth(milliseconds: Double) {
+        depthMilliseconds = depthMilliseconds == 0
+            ? milliseconds
+            : depthMilliseconds * 0.85 + milliseconds * 0.15
+        depthFPS = 1000.0 / max(depthMilliseconds, 0.001)
     }
 }

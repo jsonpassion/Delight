@@ -1,6 +1,9 @@
 //
 //  MetalPreviewView.swift
-//  MTKView를 SwiftUI에 붙인다. 최종 합성 결과를 그린다.
+//  MTKView를 SwiftUI에 붙여 카메라와 깊이맵을 좌우로 보여준다.
+//
+//  DepthPipeline이 GPU 완료를 기다린 뒤에 텍스처를 publish하므로,
+//  여기서 클래식 큐로 읽어도 경합이 없다.
 //
 
 import SwiftUI
@@ -8,6 +11,7 @@ import MetalKit
 
 struct MetalPreviewView: NSViewRepresentable {
     let engine: RelightEngine
+    var splitFraction: Float
 
     func makeCoordinator() -> Coordinator {
         Coordinator(engine: engine)
@@ -16,28 +20,36 @@ struct MetalPreviewView: NSViewRepresentable {
     func makeNSView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: engine.device)
         view.colorPixelFormat = .bgra8Unorm
-        view.framebufferOnly = false
+        view.framebufferOnly = false          // 컴퓨트 셰이더가 드로어블에 쓴다
         view.preferredFramesPerSecond = 60
-        view.isPaused = false
         view.enableSetNeedsDisplay = false
+        view.isPaused = false
         view.delegate = context.coordinator
         view.layer?.isOpaque = true
         return view
     }
 
-    func updateNSView(_ view: MTKView, context: Context) { }
+    func updateNSView(_ view: MTKView, context: Context) {
+        context.coordinator.splitFraction = splitFraction
+    }
 
     @MainActor
     final class Coordinator: NSObject, MTKViewDelegate {
         private let engine: RelightEngine
-        private let previewSink = PreviewSink()
         private let commandQueue: MTLCommandQueue?
+        private let compositePSO: MTLComputePipelineState?
+        var splitFraction: Float = 0.5
 
         init(engine: RelightEngine) {
             self.engine = engine
             self.commandQueue = engine.device.makeCommandQueue()
+            if let library = engine.device.makeDefaultLibrary(),
+               let function = library.makeFunction(name: "composite_split") {
+                self.compositePSO = try? engine.device.makeComputePipelineState(function: function)
+            } else {
+                self.compositePSO = nil
+            }
             super.init()
-            engine.attach(sink: previewSink)
         }
 
         nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { }
@@ -46,22 +58,31 @@ struct MetalPreviewView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 guard let drawable = view.currentDrawable,
                       let commandQueue,
+                      let compositePSO,
                       let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
-                if let source = previewSink.latest,
-                   let blit = commandBuffer.makeBlitCommandEncoder() {
-                    // P1: 캡처 텍스처를 그대로 보여준다.
-                    // P2 이후 여기가 리라이팅 결과 텍스처로 바뀐다.
-                    let width  = min(source.width,  drawable.texture.width)
-                    let height = min(source.height, drawable.texture.height)
-                    blit.copy(from: source,
-                              sourceSlice: 0, sourceLevel: 0,
-                              sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                              sourceSize: MTLSize(width: width, height: height, depth: 1),
-                              to: drawable.texture,
-                              destinationSlice: 0, destinationLevel: 0,
-                              destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-                    blit.endEncoding()
+                let (camera, depth) = engine.frameStore.latest()
+                let source = camera ?? depth
+                guard let source else {
+                    commandBuffer.present(drawable)
+                    commandBuffer.commit()
+                    return
+                }
+
+                // 깊이가 아직 없으면 카메라만 꽉 채워 보여준다.
+                let effectiveSplit = (depth != nil && engine.showDepth) ? splitFraction : 1.0
+                var split = effectiveSplit
+
+                if let encoder = commandBuffer.makeComputeCommandEncoder() {
+                    encoder.setComputePipelineState(compositePSO)
+                    encoder.setTexture(source, index: 0)
+                    encoder.setTexture(depth ?? source, index: 1)
+                    encoder.setTexture(drawable.texture, index: 2)
+                    encoder.setBytes(&split, length: MemoryLayout<Float>.size, index: 0)
+                    encoder.dispatchThreads(
+                        MTLSize(width: drawable.texture.width, height: drawable.texture.height, depth: 1),
+                        threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+                    encoder.endEncoding()
                 }
 
                 commandBuffer.present(drawable)

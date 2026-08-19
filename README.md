@@ -78,7 +78,7 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
 ## 진행 상황
 
 - [x] **P0** 리서치 · 환경 검증 · 벤치마크
-- [ ] **P1** 캡처 → Metal 4 추론 → 깊이 시각화
+- [x] **P1** 캡처 → Metal 4 추론 → 깊이 시각화 · [파이프라인 해부](https://jsonpassion.github.io/Delight/pipeline.html)
 - [ ] **P2** 언프로젝션 + 노멀 + 고정 광원 리라이팅
 - [ ] **P3** 레이마칭 그림자 + AO + 스펙큘러
 - [ ] **P4** 핸드포즈 + 핀치 + z 샘플링
