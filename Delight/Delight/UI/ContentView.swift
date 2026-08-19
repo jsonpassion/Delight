@@ -20,8 +20,11 @@ struct ContentView: View {
                 if case .idle = engine.status { startOverlay }
                 if case .failed(let message) = engine.status { errorOverlay(message) }
 
-                if engine.status == .running && engine.showDepth {
-                    splitControl
+                if engine.status == .running {
+                    VStack(spacing: 10) {
+                        if engine.inputMode == .hand { pinchIndicator }
+                        if engine.showDepth { splitControl }
+                    }
                 }
             }
             .frame(minWidth: 640)
@@ -62,6 +65,30 @@ struct ContentView: View {
         }
     }
 
+    /// 핀치 상태 피드백. 손을 놓쳤는지, 잡았는지, 얼마나 깊은지 한눈에 보인다.
+    private var pinchIndicator: some View {
+        let pinch = engine.pinch
+        let tracking = engine.handTracker?.isHandVisible ?? false
+        return HStack(spacing: 10) {
+            Image(systemName: pinch.isPinching ? "hand.pinch.fill" : "hand.raised")
+                .foregroundStyle(pinch.isPinching ? .orange : (tracking ? .primary : .secondary))
+            Text(pinch.isPinching ? "조명을 잡았습니다"
+                                  : (tracking ? "핀치하면 조명을 잡습니다" : "손이 보이지 않습니다"))
+                .font(.caption)
+            if pinch.isPinching {
+                Divider().frame(height: 12)
+                Text(engine.lightRig.isBehindSubject
+                     ? String(format: "역광 %.0f%%", engine.lightRig.backlightAmount * 100)
+                     : "정면광")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
     /// 뷰 좌표 → 프리뷰 정규화 좌표.
     /// 두 가지를 보정해야 손이 조명을 따라온다.
     ///  1) 좌우 분할 — 왼쪽(카메라) 패널 안에서의 상대 위치로 환산
@@ -69,6 +96,7 @@ struct ContentView: View {
     /// 이 보정을 빠뜨리면 조명이 손 반대쪽으로 간다. 반드시 한 곳에서만 한다.
     private func moveLight(to point: CGPoint, in size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
+        // 손 모드에서도 드래그는 항상 먹는다. 데모 중 손 인식이 실패해도 죽지 않는 유일한 장치다.
 
         let split = (engine.showDepth && splitFraction > 0.001) ? CGFloat(splitFraction) : 1.0
         let paneWidth = max(size.width * split, 1)

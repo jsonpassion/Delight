@@ -134,8 +134,11 @@ nonisolated final class DepthPipeline {
         // 텐서 — 셰이더가 직접 읽으려면 buffer-backed 여야 한다.
         let (inBuffer, inTensor) = try Self.makeTensor(
             device: device, dims: [Self.modelWidth, Self.modelHeight, 3, 1], rowStride: rowStride)
+        // 출력만 .shared — 핀치 z를 CPU에서 읽어야 한다.
+        // 통합 메모리라 비용이 거의 없다(프로브 실측 15.1~15.6ms로 .private과 동일).
         let (outBuffer, outTensor) = try Self.makeTensor(
-            device: device, dims: [Self.modelWidth, Self.modelHeight, 1, 1], rowStride: rowStride)
+            device: device, dims: [Self.modelWidth, Self.modelHeight, 1, 1],
+            rowStride: rowStride, storageMode: .shared)
         self.inputBuffer = inBuffer
         self.inputTensor = inTensor
         self.depthBuffer = outBuffer
@@ -341,16 +344,52 @@ nonisolated final class DepthPipeline {
         return (depth: target, relit: relitTarget)
     }
 
+    // MARK: 깊이 샘플링
+
+    /// 정규화 좌표(좌상단 원점)에서 역깊이를 읽는다. 클수록 카메라에 가깝다.
+    ///
+    /// 손끝은 얇아서 최근접 한 점을 그냥 읽으면 깊이가 배경으로 샌다.
+    /// 그래서 이웃에서 **가장 가까운 쪽 분위수**를 쓴다 — 평균이나 중앙값이면
+    /// 배경 픽셀이 섞여 광원이 뒤로 밀린다. (docs/01-architecture.md §8)
+    func sampleInverseDepth(atNormalized point: SIMD2<Float>, radius: Int = 2) -> Float? {
+        guard depthBuffer.storageMode == .shared else { return nil }
+
+        let cx = Int((point.x * Float(Self.modelWidth)).rounded())
+        let cy = Int((point.y * Float(Self.modelHeight)).rounded())
+        guard cx >= 0, cy >= 0, cx < Self.modelWidth, cy < Self.modelHeight else { return nil }
+
+        let pointer = depthBuffer.contents().bindMemory(
+            to: Float.self, capacity: depthBuffer.length / MemoryLayout<Float>.size)
+
+        var neighborhood: [Float] = []
+        neighborhood.reserveCapacity((radius * 2 + 1) * (radius * 2 + 1))
+        for dy in -radius...radius {
+            let y = cy + dy
+            guard y >= 0, y < Self.modelHeight else { continue }
+            for dx in -radius...radius {
+                let x = cx + dx
+                guard x >= 0, x < Self.modelWidth else { continue }
+                neighborhood.append(pointer[y * rowStride + x])
+            }
+        }
+        guard !neighborhood.isEmpty else { return nil }
+
+        neighborhood.sort()
+        let index = min(Int(Float(neighborhood.count) * 0.8), neighborhood.count - 1)
+        return neighborhood[index]
+    }
+
     // MARK: 텐서
 
     /// device-alloc 텐서는 strides가 반드시 nil이어야 한다.
     /// 셰이더가 읽어야 하므로 MTLBuffer 기반으로 만든다.
-    private static func makeTensor(device: MTLDevice, dims: [Int], rowStride: Int)
+    private static func makeTensor(device: MTLDevice, dims: [Int], rowStride: Int,
+                                   storageMode: MTLStorageMode = .private)
         throws -> (MTLBuffer, MTLTensor) {
         let descriptor = MTLTensorDescriptor()
         descriptor.dataType = .float32
         descriptor.usage = [.machineLearning, .compute]
-        descriptor.storageMode = .private
+        descriptor.storageMode = storageMode
         descriptor.dimensions = extents(dims)
 
         // machineLearning usage면 strides[1]이 64바이트 정렬이어야 한다.
@@ -359,7 +398,8 @@ nonisolated final class DepthPipeline {
         descriptor.strides = extents(strides)
 
         let sizeAndAlign = device.tensorSizeAndAlign(descriptor: descriptor)
-        guard let buffer = device.makeBuffer(length: sizeAndAlign.size, options: .storageModePrivate),
+        let options: MTLResourceOptions = storageMode == .shared ? .storageModeShared : .storageModePrivate
+        guard let buffer = device.makeBuffer(length: sizeAndAlign.size, options: options),
               let tensor = try? buffer.makeTensor(descriptor: descriptor, offset: 0) else {
             throw DepthPipelineError.resourceAllocationFailed
         }
