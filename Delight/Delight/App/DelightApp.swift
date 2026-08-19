@@ -1,16 +1,16 @@
 //
-//  MyLittleSunshineApp.swift
-//  My Little Sunshine — 손으로 잡는 조명
+//  DelightApp.swift
+//  Delight — 손으로 잡는 조명
 //
 
 import SwiftUI
 
 @main
-struct MyLittleSunshineApp: App {
+struct DelightApp: App {
     @State private var engine = RelightEngine()
 
     var body: some Scene {
-        Window("My Little Sunshine", id: "main") {
+        Window("Delight", id: "main") {
             ContentView()
                 .environment(engine)
                 .frame(minWidth: 960, minHeight: 640)

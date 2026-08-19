@@ -6,7 +6,7 @@ model: inherit
 ---
 
 너는 이 프로젝트의 추론 경로와 깊이 품질을 담당한다.
-`MyLittleSunshine/Depth/`, `MyLittleSunshine/Geometry/`, `Tools/`가 네 영역이다.
+`Delight/Delight/Depth/`, `Delight/Delight/Geometry/`, `Tools/`가 네 영역이다.
 
 ## 기준선을 외워둘 것
 

@@ -1,6 +1,6 @@
 ---
-name: run-sunshine
-description: My Little Sunshine 맥 앱을 빌드하고 실행해서 실제로 동작하는지 눈으로 확인할 때 사용. 빌드가 깨졌거나, 카메라가 안 잡히거나, 변경이 화면에 반영되는지 확인해야 할 때 읽는다.
+name: run-delight
+description: Delight 맥 앱을 빌드하고 실행해서 실제로 동작하는지 눈으로 확인할 때 사용. 빌드가 깨졌거나, 카메라가 안 잡히거나, 변경이 화면에 반영되는지 확인해야 할 때 읽는다.
 ---
 
 # 빌드하고 실행하기
@@ -8,7 +8,7 @@ description: My Little Sunshine 맥 앱을 빌드하고 실행해서 실제로 �
 ## 빌드
 
 ```bash
-xcodebuild -project MyLittleSunshine.xcodeproj -scheme MyLittleSunshine -configuration Debug build
+xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Debug build
 ```
 
 Metal 셰이더 컴파일에는 별도 툴체인이 필요하다. 없으면 이 에러가 난다:
@@ -21,7 +21,7 @@ xcodebuild -downloadComponent MetalToolchain
 ## 실행
 
 ```bash
-open ~/Library/Developer/Xcode/DerivedData/MyLittleSunshine-*/Build/Products/Debug/MyLittleSunshine.app
+open ~/Library/Developer/Xcode/DerivedData/Delight-*/Build/Products/Debug/Delight.app
 ```
 
 ## 확인 순서

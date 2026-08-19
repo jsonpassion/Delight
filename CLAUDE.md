@@ -1,34 +1,39 @@
-# My Little Sunshine
+# Delight
 
 핀치로 3D 공간의 광원을 집어 옮기면 웹캠 영상이 그 조명으로 다시 렌더링되는 macOS 앱.
 가까운 물체가 빛을 가리고, 피부에 반사광이 뜨고, 결과는 Zoom에 가상 카메라로 들어간다.
 
 ## 구조
 
+Xcode 프로젝트는 `Delight/` 아래에 있고, 그 외 자산은 리포 루트에 있다.
+
 ```
-MyLittleSunshine/          앱 타깃 (Xcode 동기화 폴더 — 디스크에 만들면 자동으로 타깃에 들어감)
-  App/         엔진 오케스트레이터, 앱 진입점
-  Capture/     AVFoundation → CVMetalTextureCache
-  Depth/       DepthProvider (Metal 4 ML 기본 / Core ML 폴백)
-  Geometry/    언프로젝션, 초점거리 추정, 깊이 안정화
-  Relight/     LightRig, 렌더러
-  Hand/        Vision 핸드포즈, 핀치 상태기계
-  Sink/        FrameSink (프리뷰 / Syphon / CMIO)
-  Shaders/     .metal
-  UI/          SwiftUI
-Tools/         probe, 벤치마크, 모델 페치 — 앱 타깃 밖이다(top-level 코드라 넣으면 안 됨)
-Models/        gitignore. Tools/fetch_models.sh 로 재생성
-docs/          리서치·아키텍처 문서
-web/           랜딩 페이지 (GitHub Pages)
+Delight/                     Xcode 프로젝트
+  Delight.xcodeproj
+  Delight.entitlements
+  Delight/                   앱 타깃 (Xcode 동기화 폴더)
+    App/       엔진 오케스트레이터, 앱 진입점
+    Capture/   AVFoundation → CVMetalTextureCache
+    Depth/     DepthProvider (Metal 4 ML 기본 / Core ML 폴백)
+    Geometry/  언프로젝션, 초점거리 추정, 깊이 안정화
+    Relight/   LightRig, 렌더러
+    Hand/      Vision 핸드포즈, 핀치 상태기계
+    Sink/      FrameSink (프리뷰 / Syphon / CMIO)
+    Shaders/   .metal
+    UI/        SwiftUI
+Tools/    probe, 벤치마크, 모델 페치 — 앱 타깃 밖이다(top-level 코드라 넣으면 안 됨)
+Models/   gitignore. Tools/fetch_models.sh 로 재생성
+docs/     리서치·아키텍처 문서
+web/      랜딩 페이지 (GitHub Pages)
 ```
 
 ## 반드시 알아야 할 사실
 
-**플랫폼은 macOS다.** 초기 템플릿이 iOS(`SDKROOT = iphoneos`)로 생성되어 있어 전환했다.
-웹캠 캡처와 CMIO 가상카메라는 macOS 전용이므로 iOS로 되돌리면 안 된다.
+**플랫폼은 macOS다.** 웹캠 캡처와 CMIO 가상카메라는 macOS 전용이다.
+(이전 시도에서 iOS 템플릿으로 생성된 적이 있다 — `SDKROOT`가 `iphoneos`면 잘못된 것이다.)
 
 **Xcode 동기화 폴더를 쓴다** (`objectVersion = 77`, `PBXFileSystemSynchronizedRootGroup`).
-`MyLittleSunshine/` 안에 파일을 만들면 pbxproj를 건드리지 않아도 타깃에 들어간다.
+`Delight/Delight/` 안에 파일을 만들면 pbxproj를 건드리지 않아도 타깃에 들어간다.
 반대로 **top-level 코드가 있는 파일을 여기 두면 빌드가 깨진다** — `Tools/`에 둘 것.
 
 **깊이 텐서에는 행 패딩이 있다.** `machineLearning` usage 때문에 `strides[1]`이 64바이트 정렬이라
@@ -52,7 +57,7 @@ f32 518열이 528 elem이 된다. 셰이더는 `depthRowStride`로 인덱싱해�
 ## 빌드
 
 ```bash
-xcodebuild -project MyLittleSunshine.xcodeproj -scheme MyLittleSunshine -configuration Debug build
+xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Debug build
 ```
 
 Metal 셰이더에는 별도 툴체인이 필요하다: `xcodebuild -downloadComponent MetalToolchain`

@@ -6,7 +6,7 @@ model: inherit
 ---
 
 너는 프레임이 들어오고 나가는 양쪽 끝을 담당한다.
-`MyLittleSunshine/Capture/`, `MyLittleSunshine/Sink/`가 네 영역이다.
+`Delight/Delight/Capture/`, `Delight/Delight/Sink/`가 네 영역이다.
 
 ## 설계 원칙
 

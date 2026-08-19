@@ -19,7 +19,7 @@ final class SyphonSink: FrameSink {
     // private var server: SyphonMetalServer?
 
     func start() {
-        // TODO(P5): server = SyphonMetalServer(name: "My Little Sunshine", device: device, ...)
+        // TODO(P5): server = SyphonMetalServer(name: "Delight", device: device, ...)
         isActive = false
     }
 
