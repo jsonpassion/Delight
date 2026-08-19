@@ -7,6 +7,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(RelightEngine.self) private var engine
     @State private var splitFraction: Float = 0.5
+    @State private var previewSize: CGSize = .zero
 
     var body: some View {
         @Bindable var engine = engine
@@ -24,6 +25,14 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 640)
+            // 크기는 레이아웃에 관여하지 않고 읽는다.
+            // GeometryReader로 NSViewRepresentable을 감싸면 크기 협상이 재귀해 크래시한다.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { previewSize = $0 }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in moveLight(to: value.location, in: previewSize) }
+            )
 
             ControlPanel()
                 .frame(minWidth: 280, idealWidth: 300, maxWidth: 380)
@@ -51,6 +60,24 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// 뷰 좌표 → 프리뷰 정규화 좌표.
+    /// 두 가지를 보정해야 손이 조명을 따라온다.
+    ///  1) 좌우 분할 — 왼쪽(카메라) 패널 안에서의 상대 위치로 환산
+    ///  2) 거울상 — 프리뷰가 반전이면 x를 뒤집는다
+    /// 이 보정을 빠뜨리면 조명이 손 반대쪽으로 간다. 반드시 한 곳에서만 한다.
+    private func moveLight(to point: CGPoint, in size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let split = (engine.showDepth && splitFraction > 0.001) ? CGFloat(splitFraction) : 1.0
+        let paneWidth = max(size.width * split, 1)
+
+        var x = Float(min(max(point.x / paneWidth, 0), 1))
+        let y = Float(min(max(point.y / size.height, 0), 1))
+        if engine.isMirrored { x = 1 - x }
+
+        engine.moveLight(toNormalized: SIMD2<Float>(x, y))
     }
 
     private var splitControl: some View {
