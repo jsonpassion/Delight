@@ -44,6 +44,11 @@ f32 518열이 528 elem이 된다. 셰이더는 `depthRowStride`로 인덱싱해�
 
 **레이마칭 thickness가 가장 위험한 파라미터다.** 크면 화면이 검게 죽고, 작으면 그림자가 안 생긴다.
 
+**샌드박스는 꺼져 있어야 한다 (`ENABLE_APP_SANDBOX = NO`).** Xcode 템플릿 기본값이 YES라
+entitlements 파일에 sandbox 키가 없어도 빌드 설정이 주입한다. 켜지면 컨테이너 밖
+`Models/`를 못 읽어 `MTLLibraryErrorDomain "Invalid metal package"`로 나타난다.
+(Syphon IOSurface 공유·CMIO 확장 설치도 샌드박스와 충돌한다 — 설계상 의도된 OFF다.)
+
 ## 성능 기준선 (M5, 518×392, 40회 median)
 
 | 경로 | median |
