@@ -12,6 +12,10 @@ struct CameraFrame {
     let texture: MTLTexture
     let pixelBuffer: CVPixelBuffer
     let presentationTime: CMTime
+
+    /// CVMetalTexture를 잡고 있어야 texture가 유효하다.
+    /// 놓치면 캐시가 텍스처를 재활용해 화면이 찢어진다.
+    let retainedTexture: CVMetalTexture
 }
 
 enum CaptureError: LocalizedError {
@@ -118,6 +122,9 @@ extension CameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
               let texture = CVMetalTextureGetTexture(cvTexture) else { return }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        onFrame?(CameraFrame(texture: texture, pixelBuffer: pixelBuffer, presentationTime: pts))
+        onFrame?(CameraFrame(texture: texture,
+                             pixelBuffer: pixelBuffer,
+                             presentationTime: pts,
+                             retainedTexture: cvTexture))
     }
 }

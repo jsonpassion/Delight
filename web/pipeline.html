@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delight 파이프라인 해부</title>
+<meta name="description" content="단안 깊이 추론에서 역광 렌더링까지 — 실시간 웹캠 리라이팅 파이프라인의 각 단계, 결정 근거, 실제로 부딪힌 버그와 검증 방법.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root{
+  --ground:#EBECF1; --surface:#fff; --sunken:#E2E4EA;
+  --ink:#14171C; --muted:#5A6170; --faint:#858C9A; --rule:#D3D7DF;
+  --key:#9E570F; --key-soft:#F6EADA; --fill:#2C6183; --fill-soft:#DFE9EF;
+  --bad:#8E3B2E; --bad-soft:#F7E7E3; --good:#2F6B4F; --good-soft:#E3F0E9;
+  --f-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Source Serif 4",Georgia,serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0F1216; --surface:#171B21; --sunken:#12161B;
+  --ink:#E6E9EF; --muted:#99A1AF; --faint:#6E7785; --rule:#272D36;
+  --key:#F0A94F; --key-soft:#2A2016; --fill:#7FB4D6; --fill-soft:#16222A;
+  --bad:#E08573; --bad-soft:#2A1815; --good:#7FC7A2; --good-soft:#14231C;
+}}
+:root[data-theme="dark"]{
+  --ground:#0F1216; --surface:#171B21; --sunken:#12161B;
+  --ink:#E6E9EF; --muted:#99A1AF; --faint:#6E7785; --rule:#272D36;
+  --key:#F0A94F; --key-soft:#2A2016; --fill:#7FB4D6; --fill-soft:#16222A;
+  --bad:#E08573; --bad-soft:#2A1815; --good:#7FC7A2; --good-soft:#14231C;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--f-body);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+
+.page{display:grid;
+  grid-template-columns:[full-start] minmax(1.25rem,1fr) [wide-start] minmax(0,10rem) [text-start] minmax(0,44rem) [text-end] minmax(0,10rem) [wide-end] minmax(1.25rem,1fr) [full-end];}
+.page>*{grid-column:text}
+.page>.wide{grid-column:wide}
+
+header{grid-column:full;background:var(--surface);border-bottom:1px solid var(--rule);padding:3rem 1.25rem 0}
+.hin{max-width:70rem;margin:0 auto;display:flex;flex-direction:column;gap:1.1rem}
+.crumb{font-family:var(--f-mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;color:var(--key);margin:0}
+.crumb a{color:var(--key)}
+h1{font-family:var(--f-display);font-weight:800;font-size:clamp(2.2rem,5.5vw,3.5rem);line-height:1.02;letter-spacing:-.03em;margin:0;text-wrap:balance;max-width:20ch}
+.sub{font-size:1.1rem;color:var(--muted);max-width:52ch;margin:0}
+.stamp{display:flex;flex-wrap:wrap;gap:.4rem 2rem;border-top:1px solid var(--rule);margin-top:.4rem;padding:.9rem 0 1.4rem;font-family:var(--f-mono);font-size:.76rem;color:var(--faint)}
+.stamp b{color:var(--muted);font-weight:500}
+
+nav.toc{grid-column:text;background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:1.1rem 1.3rem;margin-top:2.5rem}
+nav.toc h2{font-size:.72rem;font-family:var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:0 0 .6rem}
+nav.toc ol{margin:0;padding-left:1.3rem;columns:2;column-gap:2rem;font-size:.94rem}
+nav.toc li{margin-bottom:.25rem;break-inside:avoid}
+nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule)}
+nav.toc a:hover{border-bottom-color:var(--key)}
+
+section{padding-top:3rem}
+section:last-of-type{padding-bottom:4rem}
+h2{font-family:var(--f-display);font-weight:700;font-size:1.6rem;letter-spacing:-.02em;line-height:1.15;margin:0 0 .3rem;text-wrap:balance;scroll-margin-top:1rem}
+h2 .num{font-family:var(--f-mono);font-size:.8rem;font-weight:600;color:var(--key);display:block;margin-bottom:.3rem;letter-spacing:.08em}
+h3{font-family:var(--f-display);font-weight:600;font-size:1.06rem;margin:1.9rem 0 .35rem}
+.dek{color:var(--muted);margin:0 0 1.4rem;font-size:.99rem}
+p{margin:0 0 1.05rem}
+a{color:var(--fill)}
+strong{font-weight:600}
+ul,ol.body{padding-left:1.2rem;margin:0 0 1.05rem}
+li{margin-bottom:.4rem}
+
+code{font-family:var(--f-mono);font-size:.85em;background:var(--sunken);padding:.1em .35em;border-radius:3px}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:1rem 1.1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.79rem;line-height:1.6}
+.cmt{color:var(--faint)}
+.hl{color:var(--key)}
+
+.tw{border:1px solid var(--rule);border-radius:5px;overflow-x:auto;margin:0 0 1.3rem;background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-family:var(--f-mono);font-size:.79rem;font-variant-numeric:tabular-nums}
+caption{caption-side:bottom;text-align:left;padding:.65rem .9rem;color:var(--faint);font-family:var(--f-mono);font-size:.72rem;border-top:1px solid var(--rule);line-height:1.55}
+th{text-align:left;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:.65rem .9rem;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:.58rem .9rem;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.n{text-align:right;white-space:nowrap}
+tr.lead td{background:var(--key-soft)}
+tr.lead td:first-child,tr.lead td.n{color:var(--key);font-weight:600}
+td .note{font-family:var(--f-body);font-size:.94rem;color:var(--muted)}
+
+figure{margin:0 0 1.4rem;background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:1.4rem 1.1rem 0;overflow-x:auto}
+figure svg{display:block;width:100%;height:auto;min-width:32rem}
+figcaption{font-family:var(--f-mono);font-size:.73rem;line-height:1.62;color:var(--faint);border-top:1px solid var(--rule);margin-top:1.1rem;padding:.65rem 0}
+
+.call{border-left:2px solid var(--key);background:var(--key-soft);padding:.95rem 1.15rem;margin:0 0 1.25rem;font-size:.96rem}
+.call.cool{border-left-color:var(--fill);background:var(--fill-soft)}
+.call.bad{border-left-color:var(--bad);background:var(--bad-soft)}
+.call.good{border-left-color:var(--good);background:var(--good-soft)}
+.call p{margin-bottom:.55rem}
+.call p:last-child{margin-bottom:0}
+.call .lbl{display:block;font-family:var(--f-mono);font-size:.67rem;letter-spacing:.11em;text-transform:uppercase;color:var(--key);margin-bottom:.35rem}
+.call.cool .lbl{color:var(--fill)}
+.call.bad .lbl{color:var(--bad)}
+.call.good .lbl{color:var(--good)}
+
+.bugs{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:5px;overflow:hidden;margin-bottom:1.3rem}
+.bug{background:var(--surface);padding:1.15rem 1.3rem}
+.bug .sym{font-family:var(--f-mono);font-size:.73rem;color:var(--bad);margin-bottom:.3rem}
+.bug h4{font-family:var(--f-display);font-size:1rem;font-weight:600;margin:0 0 .35rem}
+.bug p{font-size:.94rem;color:var(--muted);margin:0 0 .5rem}
+.bug p:last-child{margin-bottom:0}
+.bug .fix{color:var(--ink)}
+
+footer{grid-column:full;border-top:1px solid var(--rule);background:var(--surface);padding:1.5rem 1.25rem;font-family:var(--f-mono);font-size:.73rem;color:var(--faint)}
+footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem}
+
+@media (max-width:46rem){
+  body{font-size:16px}
+  nav.toc ol{columns:1}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="hin">
+    <p class="crumb"><a href="./">← Delight</a> · 기술 해부</p>
+    <h1>파이프라인 해부</h1>
+    <p class="sub">웹캠 프레임 한 장이 재조명된 영상이 되기까지 무슨 일이 일어나는가.
+      각 단계가 왜 그 자리에 있는지, 무엇이 실제로 깨졌고 어떻게 잡았는지 전부 적었다.</p>
+    <div class="stamp">
+      <span><b>검증 환경</b> Apple M5 · macOS 26.1 · Xcode 26</span>
+      <span><b>모델</b> Depth Anything V2-small</span>
+      <span><b>추론</b> 15.4 ms · 전체 체인 15.6 ms</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#why">왜 이 문제인가</a></li>
+    <li><a href="#stages">파이프라인 전 구간</a></li>
+    <li><a href="#decisions">핵심 결정과 근거</a></li>
+    <li><a href="#depth">깊이: 상대성이라는 함정</a></li>
+    <li><a href="#raymarch">그림자: POM과 같은 알고리즘</a></li>
+    <li><a href="#backlight">역광: 빛이 뒤로 갔을 때</a></li>
+    <li><a href="#bugs">실제로 깨진 것들</a></li>
+    <li><a href="#verify">검증 방법론</a></li>
+    <li><a href="#budget">성능 예산</a></li>
+    <li><a href="#repro">재현 절차</a></li>
+  </ol>
+</nav>
+
+<!-- ─────────────────────────────────────── -->
+<section id="why">
+  <h2><span class="num">01</span>왜 이 문제인가</h2>
+  <p class="dek">기술이 아니라 빈칸에서 출발했다.</p>
+
+  <p>화상회의에서 조명은 이미 여러 제품이 건드린다. 그런데 전부 <strong>프리셋</strong>이다.
+    macOS Studio Light은 얼굴을 밝히고 배경을 어둡게 하는 한 가지 효과이고,
+    NVIDIA Broadcast의 Virtual Key Light도 위치를 옮길 수 없다.
+    고품질 쪽인 SwitchLight는 포스트프로덕션 속도이고,
+    디퓨전 기반 실시간 연구인 LiveLight(TOG 2026)도 15.78 fps · 0.253 s 지연이다.</p>
+
+  <p>비어 있는 칸은 <strong>실시간 + 위치 제어 + 손 인터랙션 + 맥 네이티브</strong>다.
+    그리고 이 조합에서는 지연이 곧 품질이다 — 손으로 무언가를 잡는 경험에서
+    250 ms는 "반응이 느리다"가 아니라 "잡히지 않는다"로 느껴진다.
+    그래서 처음부터 물리 기반 렌더링을 택했다. 품질 상한은 디퓨전이 높지만,
+    이 제품이 파는 것은 화질이 아니라 <em>손끝에 붙는 느낌</em>이다.</p>
+
+  <div class="call cool">
+    <span class="lbl">설계를 지배한 한 문장</span>
+    <p>깊이 추론은 33 ms 늦어도 아무도 모른다. 조명이 손을 33 ms 늦게 따라오면 즉시 티가 난다.</p>
+    <p>이 비대칭이 뒤의 거의 모든 결정을 만들었다 — 레이트 분리, 프레임 드롭 정책, 커맨드 버퍼 구조까지.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="stages" class="wide">
+  <h2><span class="num">02</span>파이프라인 전 구간</h2>
+  <p class="dek" style="max-width:44rem">한 프레임이 지나가는 길. 추론 출력이 GPU 메모리를 떠나지 않는 것이 핵심이다.</p>
+
+  <figure>
+    <svg viewBox="0 0 940 360" role="img" aria-label="카메라 프레임이 전처리, ML 추론, 깊이 안정화, 지오메트리 복원, 리라이팅을 거쳐 출력 싱크로 나가는 흐름. 추론 출력 텐서의 MTLBuffer를 다음 컴퓨트 스테이지가 직접 읽으며 CPU 왕복이 없다.">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--key)"/></marker>
+      </defs>
+
+      <rect x="6" y="128" width="104" height="56" rx="3" fill="none" stroke="currentColor" opacity=".5"/>
+      <text x="58" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">AVCapture</text>
+      <text x="58" y="166" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">BGRA · IOSurface</text>
+      <line x1="110" y1="156" x2="140" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="125" y="146" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="currentColor" opacity=".55">zero-copy</text>
+
+      <rect x="142" y="58" width="700" height="196" rx="4" fill="none" stroke="currentColor" stroke-dasharray="3 3" opacity=".4"/>
+      <text x="154" y="50" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="currentColor">단일 MTL4CommandBuffer — CPU 동기화 0회</text>
+
+      <rect x="158" y="128" width="92" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="204" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C0</text>
+      <text x="204" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">전처리</text>
+      <line x1="250" y1="156" x2="278" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+
+      <rect x="280" y="120" width="126" height="72" rx="3" fill="none" stroke="var(--key)" stroke-width="2"/>
+      <text x="343" y="143" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" font-weight="600" fill="var(--key)">ML encoder</text>
+      <text x="343" y="159" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="var(--key)">dispatchNetwork</text>
+      <text x="343" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" font-weight="600" fill="var(--key)">15.4 ms</text>
+
+      <line x1="406" y1="156" x2="448" y2="156" stroke="var(--key)" stroke-width="2" marker-end="url(#a2)"/>
+      <text x="427" y="144" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">MTLBuffer</text>
+      <text x="427" y="174" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">그대로</text>
+
+      <rect x="450" y="128" width="96" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="498" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C1·C2</text>
+      <text x="498" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">안정화·업샘플</text>
+      <line x1="546" y1="156" x2="574" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+
+      <rect x="576" y="128" width="96" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="624" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C3·C4</text>
+      <text x="624" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">노멀·AO</text>
+      <line x1="672" y1="156" x2="700" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+
+      <rect x="702" y="128" width="102" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="753" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C5</text>
+      <text x="753" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">레이마칭·조명</text>
+
+      <line x1="842" y1="156" x2="874" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <text x="900" y="153" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="currentColor">Sink</text>
+
+      <text x="343" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">30 Hz</text>
+      <text x="640" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">60 Hz</text>
+      <line x1="280" y1="232" x2="406" y2="232" stroke="currentColor" opacity=".3"/>
+      <line x1="450" y1="232" x2="804" y2="232" stroke="currentColor" opacity=".3"/>
+
+      <text x="6" y="292" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C0 전처리(0-255 RGB · NCHW · 행패딩) · ML 추론 · C1 affine 정합+시간필터 · C2 joint bilateral 업샘플</text>
+      <text x="6" y="310" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C3 언프로젝션+5-tap 노멀 · C4 half-res AO · C5 레이마칭 그림자+delta lighting+역광</text>
+      <text x="6" y="328" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">Sink = 프리뷰 / Syphon→OBS / CMIO Camera Extension</text>
+    </svg>
+    <figcaption>추론 출력 텐서의 백킹 버퍼를 다음 컴퓨트 스테이지가 그대로 읽는다. 포맷 변환도, CPU 왕복도, 인터롭 동기화도 없다. 깊이는 30 Hz, 렌더는 60 Hz로 분리해 추론 비용을 두 프레임에 나눈다.</figcaption>
+  </figure>
+
+  <div class="tw" style="max-width:44rem">
+    <table>
+      <thead><tr><th>단계</th><th>입력 → 출력</th><th class="n">비용</th><th>왜 필요한가</th></tr></thead>
+      <tbody>
+        <tr><td>C0 전처리</td><td>BGRA 텍스처 → f32 NCHW 텐서</td><td class="n">~0.2 ms</td><td class="note">모델은 518×392 고정. stretch로 맞춘다(DAv2가 그렇게 학습됨)</td></tr>
+        <tr class="lead"><td>ML 추론</td><td>텐서 → 역깊이 텐서</td><td class="n">15.4 ms</td><td class="note">전체 비용의 98%. 여기가 예산의 전부다</td></tr>
+        <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정</td></tr>
+        <tr><td>C2 업샘플</td><td>518×392 → 출력 해상도</td><td class="n">~1.0 ms</td><td class="note">bilinear면 실루엣이 뭉개져 그림자가 얼굴 밖으로 샌다</td></tr>
+        <tr><td>C3 지오메트리</td><td>깊이 → 뷰공간 위치·노멀</td><td class="n">~0.8 ms</td><td class="note">조명 계산에 노멀이 필요하다. 5-tap이라야 실루엣이 안 깨진다</td></tr>
+        <tr><td>C4 AO</td><td>위치·노멀 → 차폐량</td><td class="n">~1.5 ms</td><td class="note">턱밑·목·코 옆 접촉 그늘. 광원과 무관하게 항상 이득</td></tr>
+        <tr><td>C5 리라이팅</td><td>전부 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">레이마칭 그림자 + 확산 + 스펙큘러 + 역광</td></tr>
+      </tbody>
+      <caption>비용은 M5 기준 추정(추론만 실측). ML 15.4 ms가 압도적이므로, 최적화 노력은 전부 그쪽에 걸어야 한다 — 나머지를 다 합쳐도 절반이 안 된다.</caption>
+    </table>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="decisions">
+  <h2><span class="num">03</span>핵심 결정과 근거</h2>
+  <p class="dek">각각 대안이 있었고, 왜 그걸 버렸는지가 더 중요하다.</p>
+
+  <h3>추론을 GPU 타임라인에 올린다</h3>
+  <p>선택지는 둘이었다. Core ML로 Neural Engine을 쓰거나, Metal 4의 ML 인코더로 GPU에서 돌리거나.
+    상식적으로는 ANE가 유리하다 — 전용 하드웨어이고 GPU를 렌더링에 온전히 남겨준다.
+    그런데 <strong>측정해보니 반대였다.</strong></p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>경로</th><th class="n">median</th><th class="n">p10 / p90</th><th class="n">fps</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td>MTL4MachineLearningCommandEncoder</td><td class="n">15.42 ms</td><td class="n">14.99 / 16.41</td><td class="n">64.9</td></tr>
+        <tr><td>Core ML <code>.all</code> (ANE)</td><td class="n">20.78 ms</td><td class="n">20.70 / 20.93</td><td class="n">48.1</td></tr>
+        <tr><td>Core ML <code>.cpuAndGPU</code></td><td class="n">19.84 ms</td><td class="n">18.98 / 21.72</td><td class="n">50.4</td></tr>
+        <tr><td>Core ML <code>.cpuOnly</code></td><td class="n">45.10 ms</td><td class="n">44.82 / 45.66</td><td class="n">22.2</td></tr>
+      </tbody>
+      <caption>Apple M5 · 518×392 · 40회 median. M5는 GPU 코어마다 Neural Accelerator가 들어 있어 행렬 연산이 ANE에 밀리지 않는다.</caption>
+    </table>
+  </div>
+
+  <p>26% 빠른 것도 이득이지만 진짜 이유는 따로 있다. Core ML 경로는 추론이 끝났음을 <strong>CPU가 알아야</strong>
+    다음 GPU 작업을 넣을 수 있다. Metal 4 ML 인코더는 같은 커맨드 버퍼 안에서 배리어 하나로 이어진다 —
+    추론 결과 버퍼를 다음 컴퓨트 셰이더가 그냥 읽는다. 프레임당 왕복 한 번이 사라지고,
+    지연의 분산(p10↔p90)도 줄어든다.</p>
+
+  <div class="call">
+    <span class="lbl">그래도 Core ML을 지운 건 아니다</span>
+    <p><code>DepthProvider</code> 프로토콜 뒤에 두 경로를 다 남겼다. GPU가 렌더링으로 포화되는 순간이 오면
+      ANE 경로가 탈출구가 된다 — 20.8 ms지만 <strong>GPU 예산을 전혀 쓰지 않는다.</strong>
+      느린 쪽을 지우지 않는 이유는, 빠른 쪽이 항상 옳은 게 아니라 상황에 따라 다르기 때문이다.</p>
+  </div>
+
+  <h3>완전 재조명이 아니라 가산 조명</h3>
+  <p>"조명을 다시 계산한다"는 말은 두 가지로 읽힌다. 원본 조명을 <em>제거하고</em> 새로 칠하거나,
+    원본 위에 새 광원을 <em>더하거나</em>. 전자가 이상적이지만 albedo·normal·roughness·specular로 분해하는
+    intrinsic decomposition이 필요하고, 그건 SwitchLight급 파이프라인이라 실시간이 아니다.</p>
+  <p>그래서 후자를 택했다. 원본을 환경광으로 보존하고 가상 광원의 기여만 더한다.
+    <strong>물리적으로도 이게 맞다</strong> — 방에 스탠드 하나를 켜는 것과 정확히 같은 연산이다.
+    다만 텍스처가 이중으로 밝아지는 걸 막으려고, 저주파 밝기를 나눠 pseudo-albedo를 만든다(Retinex 근사).</p>
+
+  <pre><code><span class="cmt">// 완전한 intrinsic 분해가 아니라, 가산 조명을 얹기 위한 최소한의 근사</span>
+float  sourceLuma = max(luminance(source), 1e-3);
+float3 albedo     = source / pow(sourceLuma, 0.7);</code></pre>
+
+  <h3>광원 z는 피사체 기준 상대값</h3>
+  <p>광원을 절대 좌표로 두면 사람이 조금만 앞뒤로 움직여도 조명이 얼굴 속으로 들어간다.
+    그래서 <code>subjectDepth + depthOffset</code>으로 잡았다. offset이 음수면 정면광, 양수면 역광이다.
+    이 한 줄이 "얼굴 앞에도 되고 뒤로도 넘어간다"를 성립시킨다.</p>
+  <pre><code>static let nearestOffset:  Float = -0.35   <span class="cmt">// 카메라 바로 앞</span>
+static let farthestOffset: Float =  0.90   <span class="cmt">// 피사체 한참 뒤 → 완전한 역광</span></code></pre>
+
+  <h3>레이트를 쪼갠다</h3>
+  <p>추론 15.4 ms를 60 fps(16.7 ms)에 욱여넣으면 예산이 남지 않는다.
+    그래서 깊이는 30 Hz, 렌더는 60 Hz로 돌리고 렌더 프레임의 절반은 직전 깊이맵을 재사용한다.
+    추론이 아직 돌고 있으면 새 캡처 프레임은 <strong>버린다</strong> — 큐에 쌓으면 지연만 늘어난다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="depth">
+  <h2><span class="num">04</span>깊이: 상대성이라는 함정</h2>
+  <p class="dek">단안 깊이 모델의 출력은 미터가 아니다. 이걸 모르면 조명이 펄럭인다.</p>
+
+  <p>Depth Anything V2가 내놓는 값은 <strong>affine-invariant inverse depth</strong>다.
+    "이 픽셀이 저 픽셀보다 가깝다"는 순서는 믿을 수 있지만, 절대 거리도 아니고
+    <strong>프레임마다 스케일과 오프셋이 달라진다.</strong> 정지 화면에서도 미세하게 흔들린다.</p>
+
+  <p>3D 공간에 고정한 광원 기준으로 보면 이건 재앙이다. 씬 전체가 앞뒤로 펌핑하면서
+    그림자가 매 프레임 크기를 바꾼다. 해법은 <strong>배경을 앵커로 쓰는 것</strong>이다.
+    사람은 움직여도 배경은 안 움직이므로, person matte 바깥 픽셀만으로
+    직전 기준 프레임에 맞추는 robust affine fit을 돌린다. 중앙값·MAD 기반이라 RANSAC이 필요 없다.</p>
+
+  <pre><code><span class="cmt">// 배경 픽셀만으로 a, b를 구한다. 사람이 움직여도 스케일이 고정된다.</span>
+a = MAD(reference) / MAD(current)
+b = median(reference) − a · median(current)
+reference ← lerp(reference, a·current + b, 0.02)   <span class="cmt">// 아주 느린 갱신</span></code></pre>
+
+  <p>플리커는 따로 잡는다. Video Depth Anything(CVPR'25)이 학습으로 푸는 문제지만 실시간엔 무겁다.
+    대신 <strong>edge-stopping 시간필터</strong>를 쓴다 — 색이 크게 변한 픽셀은 히스토리를 기각한다.
+    색 가중치를 빼면 사람이 움직일 때 깊이가 끌려와 고스팅이 생긴다. 이 항은 선택이 아니다.</p>
+
+  <div class="call bad">
+    <span class="lbl">macOS 하드 제약</span>
+    <p>깊이맵을 3D로 되돌리려면 초점거리 <code>fx</code>가 필요한데, <strong>macOS는 이걸 주지 않는다.</strong></p>
+    <pre style="margin:.6rem 0 .5rem"><code>AVCaptureDeviceFormat.videoFieldOfView              → API_UNAVAILABLE(macos)
+AVCaptureConnection.cameraIntrinsicMatrixDelivery*  → API_UNAVAILABLE(macos)</code></pre>
+    <p>둘 다 iOS 전용이다. 그래서 얼굴 랜드마크의 동공간 픽셀거리와 성인 평균 IPD 63 mm로 추정하고,
+      3초치 중앙값을 모아 <strong>고정한 뒤 다시는 바꾸지 않는다.</strong>
+      fx가 20% 틀려도 사람은 모른다. 프레임마다 변하면 즉시 티가 난다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="raymarch" class="wide">
+  <h2><span class="num">05</span>그림자: POM과 같은 알고리즘</h2>
+  <p class="dek" style="max-width:44rem">화면공간 깊이버퍼를 높이장으로 보면, 시차 폐색 매핑의 셀프섀도우와 스크린스페이스 섀도우는 같은 것이다.</p>
+
+  <figure>
+    <svg viewBox="0 0 940 320" role="img" aria-label="픽셀에서 광원으로 향하는 광선이 높이장을 스텝마다 샘플하고, 광선이 씬 표면보다 뒤에 있으면서 그 깊이차가 두께 창 안에 들어올 때만 가려진 것으로 판정한다.">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="var(--key)"/></marker></defs>
+
+      <path d="M40 262 L160 262 L188 154 L250 130 L318 154 L348 262 L500 262 L522 208 L596 198 L618 262 L900 262"
+            fill="none" stroke="currentColor" stroke-width="2"/>
+      <text x="250" y="114" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="currentColor">사람 (matte 내부)</text>
+      <text x="750" y="284" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="currentColor" opacity=".6">배경</text>
+
+      <path d="M188 154 L250 130 L318 154 L318 202 L250 178 L188 202 Z" fill="var(--key)" opacity=".14"/>
+      <line x1="334" y1="154" x2="334" y2="202" stroke="var(--key)" stroke-width="1.4"/>
+      <line x1="329" y1="154" x2="339" y2="154" stroke="var(--key)" stroke-width="1.4"/>
+      <line x1="329" y1="202" x2="339" y2="202" stroke="var(--key)" stroke-width="1.4"/>
+      <text x="348" y="180" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="var(--key)">thickness</text>
+      <text x="348" y="195" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="var(--key)" opacity=".85">≈ 얼굴폭 × 0.25</text>
+
+      <circle cx="680" cy="70" r="9" fill="var(--key)"/>
+      <circle cx="680" cy="70" r="18" fill="none" stroke="var(--key)" opacity=".45"/>
+      <text x="680" y="44" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="var(--key)">광원 L</text>
+
+      <line x1="126" y1="262" x2="671" y2="79" stroke="var(--key)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#a3)"/>
+      <circle cx="126" cy="262" r="3.5" fill="var(--key)"/>
+      <text x="74" y="255" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="var(--key)">픽셀 P</text>
+      <circle cx="215" cy="232" r="2.4" fill="var(--key)" opacity=".55"/>
+      <circle cx="285" cy="209" r="2.4" fill="var(--key)" opacity=".55"/>
+      <circle cx="355" cy="185" r="2.4" fill="var(--key)" opacity=".55"/>
+      <circle cx="425" cy="162" r="2.4" fill="var(--key)" opacity=".55"/>
+      <circle cx="285" cy="209" r="7.5" fill="none" stroke="var(--bad)" stroke-width="1.8"/>
+      <text x="232" y="197" font-family="IBM Plex Mono,monospace" font-size="10" fill="var(--bad)">가려짐</text>
+
+      <line x1="800" y1="262" x2="690" y2="84" stroke="var(--fill)" stroke-width="1.6" stroke-dasharray="6 4"/>
+      <circle cx="800" cy="262" r="3.5" fill="var(--fill)"/>
+      <text x="840" y="232" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="var(--fill)">조명 받음</text>
+
+      <text x="40" y="306" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="currentColor" opacity=".7">가려짐 판정:  bias &lt; (ray.z − sceneZ(uv)) &lt; thickness      ·  16–32 스텝, 원뿔 지터링으로 페넘브라</text>
+    </svg>
+    <figcaption>모노큘러 깊이는 2.5D다 — 물체의 뒤쪽을 모른다. 두께 창이 없으면 표면 뒤로 들어간 모든 픽셀이 가려진 것으로 판정되어 화면 전체가 검게 죽는다.</figcaption>
+  </figure>
+
+  <div class="call bad" style="max-width:44rem">
+    <span class="lbl">가장 위험한 파라미터</span>
+    <p><code>thickness</code>는 이 파이프라인에서 유일하게 <strong>양쪽 극단이 모두 완전한 실패</strong>인 값이다.
+      크면 배경 전체가 사람 뒤에 있다고 판정되어 화면이 까맣게 죽고, 작으면 그림자가 아예 안 생긴다.
+      person matte 안쪽은 몸통 두께로, 배경은 얇게 주는 프라이어가 "가까운 물체가 빛을 가린다"를
+      성립시키는 유일한 장치다.</p>
+  </div>
+
+  <h3>부드러운 그림자는 공짜에 가깝다</h3>
+  <p>광원 반경만큼 목표점을 원뿔 지터링하면 페넘브라가 생긴다. 샘플은 여전히 한 개다 —
+    노이즈는 인터리브드 그래디언트 노이즈로 깨고, 시간 누적으로 정리한다.
+    실제 광원처럼 <strong>가림물에서 멀어질수록 그림자가 부드러워진다.</strong></p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="backlight" class="wide">
+  <h2><span class="num">06</span>역광: 빛이 뒤로 갔을 때</h2>
+  <p class="dek" style="max-width:44rem">광원을 얼굴 뒤로 넘기면 네 가지가 동시에 일어나야 실제처럼 보인다.</p>
+
+  <figure>
+    <svg viewBox="0 0 940 300" role="img" aria-label="광원이 피사체 앞에 있을 때와 뒤에 있을 때의 차이. 뒤에 있으면 앞면이 어두워지고, 실루엣에 림라이트가 생기고, 얇은 부위에 투과 산란이 일어나며, 광원 글로우 자체가 머리에 가려진다.">
+      <!-- 정면광 -->
+      <text x="200" y="34" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" font-weight="600" fill="currentColor">정면광 · offset &lt; 0</text>
+      <circle cx="90" cy="150" r="8" fill="var(--key)"/>
+      <text x="90" y="128" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="var(--key)">L</text>
+      <path d="M200 96 a46 58 0 1 1 0 116 a46 58 0 1 1 0 -116" fill="var(--key)" opacity=".22" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M200 96 a46 58 0 0 0 0 116 a46 58 0 0 0 0 -116" fill="var(--key)" opacity=".16"/>
+      <line x1="104" y1="150" x2="148" y2="150" stroke="var(--key)" stroke-width="1.6" stroke-dasharray="5 3"/>
+      <text x="290" y="150" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".7">앞면이 밝다</text>
+      <text x="290" y="168" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".7">스펙큘러가 뜬다</text>
+      <text x="200" y="248" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".55">카메라 ←</text>
+
+      <line x1="470" y1="60" x2="470" y2="256" stroke="currentColor" opacity=".25" stroke-dasharray="3 3"/>
+
+      <!-- 역광 -->
+      <text x="700" y="34" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" font-weight="600" fill="currentColor">역광 · offset &gt; 0</text>
+      <path d="M700 96 a46 58 0 1 1 0 116 a46 58 0 1 1 0 -116" fill="none" stroke="var(--key)" stroke-width="4" opacity=".85"/>
+      <path d="M700 96 a46 58 0 1 1 0 116 a46 58 0 1 1 0 -116" fill="currentColor" opacity=".18" stroke="none"/>
+      <circle cx="700" cy="154" r="8" fill="var(--key)" opacity=".28"/>
+      <circle cx="700" cy="154" r="14" fill="none" stroke="var(--key)" stroke-dasharray="2 3" opacity=".5"/>
+      <text x="700" y="278" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="var(--key)" opacity=".8">광원 글로우가 머리에 가려짐</text>
+
+      <text x="790" y="112" font-family="IBM Plex Mono,monospace" font-size="10" fill="var(--key)">① 실루엣 림라이트</text>
+      <text x="790" y="140" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".7">② 앞면은 그림자</text>
+      <text x="790" y="168" font-family="IBM Plex Mono,monospace" font-size="10" fill="var(--fill)">③ 귀·머리카락 투과</text>
+      <text x="790" y="196" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".7">④ 글로우 깊이 테스트</text>
+
+      <line x1="618" y1="120" x2="660" y2="128" stroke="var(--key)" stroke-width="1.2"/>
+      <line x1="618" y1="188" x2="660" y2="180" stroke="var(--fill)" stroke-width="1.2"/>
+    </svg>
+    <figcaption>앞면이 어두워지는 것은 레이마칭이 자연히 처리한다 — 광선이 머리 내부를 통과하며 두께 창 안에서 가림 판정을 받는다. 나머지 셋은 명시적으로 넣어야 한다.</figcaption>
+  </figure>
+
+  <h3>① 감쌈 확산 (wrap diffuse)</h3>
+  <p>순수 램버시안은 <code>N·L</code>이 0이 되는 지점에서 딱 끊긴다. 피부는 표면 아래로 빛이 산란해
+    명암 경계가 훨씬 부드럽다. 이걸 한 줄로 근사한다.</p>
+  <pre><code>float wrapped = saturate((dot(N, L) + wrap) / (1.0 + wrap));   <span class="cmt">// 피부는 wrap 0.3~0.5</span></code></pre>
+
+  <h3>② 림라이트</h3>
+  <p>광원이 뒤에 있을 때만 켜진다. <code>backness</code>는 광원 방향이 시선 반대쪽을 향하는 정도다.
+    실루엣 픽셀은 정의상 광선이 곧바로 화면을 벗어나므로 그림자에 가려지지 않는다 —
+    이게 역광에서 테두리만 빛나는 이유다.</p>
+  <pre><code>float backness = saturate(-dot(L, V));                <span class="cmt">// 1 = 완전한 역광</span>
+float rim      = pow(1.0 - saturate(dot(N, V)), rimPower);
+accumulated   += rim * backness * matte * lightColor * intensity;</code></pre>
+
+  <h3>③ 투과 산란</h3>
+  <p>귀와 머리카락처럼 얇은 부위는 빛이 통과해 붉게 비친다. 실제로는 subsurface scattering이지만
+    실시간에서는 Frostbite 계열의 값싼 근사로 충분하다 — 빛 방향을 노멀로 살짝 왜곡해 뒤에서 본다.
+    "얇음"은 깊이 기울기로 추정한다. 실루엣 근처에서 기울기가 크다.</p>
+  <pre><code>float3 scatterDir = normalize(-L + N * 0.25);
+float  scatter    = pow(saturate(dot(V, scatterDir)), 4.0);
+accumulated      += scatter * thinness * matte * translucency * lightColor;</code></pre>
+
+  <h3>④ 광원 글로우의 깊이 테스트</h3>
+  <p>가장 작지만 체감이 가장 큰 항목이다. 광원을 나타내는 빛무리를 그릴 때 씬 깊이와 비교해서,
+    머리보다 멀면 그리지 않는다. 손으로 조명을 얼굴 뒤로 넘기면 <strong>빛무리가 머리 뒤로 사라진다.</strong>
+    이 한 장면이 "이게 진짜 3D 공간에서 계산되고 있다"를 말없이 증명한다.</p>
+  <pre><code>bool visible = (light.position.z &lt; sceneZ + bias) || sceneZ &lt;= 1e-4;
+if (visible) glow += exp(-d*d*900.0) * lightColor * intensity;</code></pre>
+
+  <div class="call good">
+    <span class="lbl">공짜로 얻는 것</span>
+    <p>손이 화면 안에 있으면 손도 깊이맵에 있다. 그래서 <strong>손 그림자가 뺨을 가로지른다.</strong>
+      별도 구현이 없다 — 레이마칭이 손을 그냥 하나의 가림물로 취급할 뿐이다.
+      같은 이유로 핀치의 z도 공짜다: 깊이맵을 손 위치에서 샘플하면 된다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="bugs">
+  <h2><span class="num">07</span>실제로 깨진 것들</h2>
+  <p class="dek">문서에 안 나오는 것들. 여기 적힌 시간이 다음 사람이 아끼는 시간이다.</p>
+
+  <h3>Metal 4 ML 인코더에서 부딪힌 여섯 가지</h3>
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">Tensor Descriptor Validation</div>
+      <h4>device-alloc 텐서는 strides가 nil이어야 한다</h4>
+      <p><code>MTLDevice.makeTensor(descriptor:)</code>에 strides를 주면 거부된다.
+        그런데 셰이더가 읽으려면 패딩 제어가 필요하다.</p>
+      <p class="fix">→ <code>MTLBuffer.makeTensor(descriptor:offset:)</code>로 buffer-backed 텐서를 만든다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">Stride at index 1 should be 64-byte aligned</div>
+      <h4>ML usage 텐서는 행이 패딩된다</h4>
+      <p>f32 518열 = 2072 B가 2112 B(528 elem)로 늘어난다. 셰이더가 <code>width</code>로 인덱싱하면
+        행마다 10칸씩 밀려 비스듬히 찢어진 그림이 나온다.</p>
+      <p class="fix">→ 항상 <code>rowStride</code>로 인덱싱한다. 채널 평면 간격도 <code>rowStride × height</code>다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">mlir module expected element type f32 but received f16</div>
+      <h4>변환된 그래프는 f32 입출력을 기대한다</h4>
+      <p>모델 가중치가 f16이라 f16 텐서를 물렸더니 MPSGraph가 assert로 죽었다.</p>
+      <p class="fix">→ 입출력 텐서는 f32로. 내부 연산 정밀도와 인터페이스 정밀도는 별개다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">세마포어에서 영원히 대기</div>
+      <h4>피드백 핸들러는 feedbackQueue 없이는 안 불린다</h4>
+      <p><code>MTL4CommitOptions.addFeedbackHandler</code>를 걸어도 콜백이 오지 않는다.</p>
+      <p class="fix">→ <code>MTL4CommandQueueDescriptor.feedbackQueue</code>를 지정한다.
+        단순 동기화만 필요하면 <code>MTLSharedEvent</code>가 더 확실하다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">리소스가 보이지 않음</div>
+      <h4>Metal 4는 자동 레지던시가 없다</h4>
+      <p>버퍼·힙·텍스처를 명시적으로 상주시켜야 한다. 매 프레임 바뀌는 카메라 텍스처가 특히 곤란하다.</p>
+      <p class="fix">→ 고정 리소스는 큐에 붙인 <code>MTLResidencySet</code>,
+        카메라 텍스처는 <code>commandBuffer.useResidencySet()</code>로 프레임 단위 처리.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">함수 이름을 모름</div>
+      <h4>mtlpackage의 진입점은 "main"</h4>
+      <p><code>metal-package-builder</code>가 만든 패키지 내부는 <code>library.mpsgraphpackage</code>다.</p>
+      <p class="fix">→ <code>library.functionNames</code>로 확인. 항상 <code>["main"]</code>이었다.</p>
+    </div>
+  </div>
+
+  <h3>가장 비쌌던 버그: 이중 정규화</h3>
+  <p>깊이맵이 나오긴 나오는데, 가운데가 멀고 가장자리가 가까운 <strong>터널 모양</strong>이 나왔다.
+    합성 입력이라 모델이 헷갈린 거라고 넘길 뻔했다. 그런데 Core ML과 대조해보니 상관계수가 <code>−0.34</code>였다.
+    음의 상관 — 우연이 아니라 <em>반대로</em> 계산하고 있었다.</p>
+
+  <p>답은 모델 그래프 안에 있었다. 컴파일된 <code>model.mil</code>의 첫 두 연산이 이것이다.</p>
+
+  <pre><code>sub(x = image, y = [123.675, 116.28, 103.53])          <span class="cmt">// ImageNet 평균 × 255</span>
+mul(x = ...,   y = [1/58.395, 1/57.12, 1/57.375])      <span class="cmt">// 1 / (std × 255)</span></code></pre>
+
+  <p><strong>정규화가 이미 그래프 안에 있었다.</strong> 그래프는 0–255 원본 RGB를 기대하는데,
+    나는 0–1로 스케일한 뒤 ImageNet 정규화를 한 번 더 걸고 있었다.
+    Core ML 경로에서는 이 전처리가 모델에 감춰져 있어 보이지 않았고,
+    mtlpackage로 변환하면 입력이 생짜 텐서가 되면서 내가 책임져야 하는 부분이 된 것이다.</p>
+
+  <pre><code><span class="cmt">// 고치기 전 — 이중 정규화</span>
+float3 rgb = source.sample(s, uv).rgb;
+float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">// ✗</span>
+
+<span class="cmt">// 고친 후 — 그래프가 알아서 한다</span>
+<span class="hl">float3 rgb = source.sample(s, uv).rgb * 255.0;</span>              <span class="cmt">// ✓</span></code></pre>
+
+  <h3>그 다음 버그: fp16을 fp32로 읽기</h3>
+  <p>고쳤는데도 상관계수가 <code>−0.28</code>이었다. 이번엔 파이프라인이 아니라 <strong>검증 코드</strong>가 틀렸다.
+    Core ML 출력은 <code>Grayscale16Half</code>인데 <code>Float</code>(4바이트)로 읽고 있었다.
+    포맷 코드 <code>1278226536</code>을 ASCII로 풀면 <code>"L00h"</code> — half다.</p>
+  <p>고치자 <code>r = 1.00000</code>이 나왔다.
+    <strong>검증 도구도 검증해야 한다</strong>는 걸 비싸게 배웠다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="verify">
+  <h2><span class="num">08</span>검증 방법론</h2>
+  <p class="dek">"돌아간다"와 "맞다"는 다른 말이다. 이 프로젝트에서 둘을 구분하는 장치들.</p>
+
+  <h3>원칙: 벤치 수치만으로 판단하지 않는다</h3>
+  <p>추론이 15 ms에 끝났다는 사실은 <em>네트워크가 실제로 실행됐다</em>는 걸 증명하지 않는다.
+    아무것도 안 하고 15 ms를 쓸 수도 있고, 쓰레기를 계산할 수도 있다.
+    그래서 모든 벤치에 <strong>결정적 입력 → 출력 통계</strong>를 붙인다.</p>
+  <pre><code>깊이 출력: min 0.1748  max 1.0000  mean 0.4352  NaN 0/203056
+→ 네트워크 실행 확인 (출력에 변화 있음)</code></pre>
+  <p><code>min == max</code>면 상수 — 실행되지 않았다는 뜻이다. NaN이 있으면 수치가 터진 것이다.</p>
+
+  <h3>독립 경로와 교차검증</h3>
+  <p>가장 강력한 장치다. 같은 입력을 <strong>서로 다른 두 구현</strong>에 넣고 결과를 비교한다.
+    Core ML은 정규화를 모델 안에 갖고 있고, Metal 4 경로는 내가 셰이더로 직접 한다 —
+    구현이 독립적이므로 둘이 일치하면 양쪽 다 맞을 확률이 매우 높다.</p>
+  <pre><code>교차검증 (Metal 4 ML vs Core ML): r = 1.00000
+→ 전처리·인덱싱 정확 (두 경로가 같은 깊이를 낸다)</code></pre>
+  <p>이 한 줄이 이중 정규화 버그를 잡았다. 눈으로만 봤다면 "합성 입력이라 그런가 보다" 하고 넘어갔을 것이다.</p>
+
+  <h3>레이아웃 불일치를 컴파일 타임으로 끌어오기</h3>
+  <p>Swift 구조체와 Metal 구조체가 어긋나면 <strong>런타임에 조용히 쓰레기 값이 들어간다.</strong>
+    컴파일러도, 검증기도 잡아주지 않는다. 그래서 헤더에 크기를 못 박았다.</p>
+  <pre><code>static_assert(sizeof(SunLight)    == 48,  "Swift 미러와 다르다");
+static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></pre>
+  <p>그리고 <strong>이 가드가 실제로 동작하는지도 확인했다</strong> — 일부러 값을 틀리게 바꿔
+    빌드가 깨지는 것을 보고 되돌렸다. 검증하지 않은 안전장치는 안전장치가 아니다.</p>
+
+  <h3>앱보다 CLI에서 먼저</h3>
+  <p>GPU 파이프라인을 SwiftUI 앱 안에서 디버깅하는 건 느리다. 콘솔도 잘 안 보이고,
+    카메라 권한이 얽히고, 한 번 돌리는 데 빌드+실행이 필요하다.
+    그래서 <code>Tools/probe_p1.swift</code>가 같은 체인을 합성 입력으로 돌리고 PNG를 떨어뜨린다.
+    <strong>눈으로 볼 수 있는 산출물</strong>이 있으면 판단이 빨라진다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="budget">
+  <h2><span class="num">09</span>성능 예산</h2>
+  <p class="dek">60 fps = 16.7 ms. 추론이 15.4 ms를 먹는다는 사실에서 모든 게 따라 나온다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>단계</th><th class="n">예산</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>전처리</td><td class="n">0.2 ms</td><td class="note">리샘플 + 텐서 쓰기</td></tr>
+        <tr class="lead"><td>추론 (30 Hz)</td><td class="n">7.7 ms</td><td class="note">15.4 ms를 두 프레임에 분산</td></tr>
+        <tr><td>깊이 안정화</td><td class="n">1.0 ms</td><td class="note">half-res 필터</td></tr>
+        <tr><td>업샘플</td><td class="n">1.0 ms</td><td class="note">joint bilateral</td></tr>
+        <tr><td>지오메트리</td><td class="n">0.8 ms</td><td class="note">5-tap 노멀</td></tr>
+        <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res</td></tr>
+        <tr><td>리라이팅 + 레이마칭</td><td class="n">3.0 ms</td><td class="note">half-res, 24스텝</td></tr>
+        <tr><td>resolve</td><td class="n">1.0 ms</td><td class="note">시간누적 + 업스케일</td></tr>
+        <tr><td><strong>합계</strong></td><td class="n"><strong>16.2 ms</strong></td><td class="note">60 fps에 아슬아슬하게</td></tr>
+      </tbody>
+      <caption>여유가 없으면 이 순서로 깎는다: ① 레이마칭 24→16스텝 ② AO 끄기 ③ 추론 20 Hz ④ 출력 30 fps. 마지막은 사실상 공짜다 — Zoom이 어차피 30 fps로 인코딩한다.</caption>
+    </table>
+  </div>
+
+  <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
+  <ol class="body">
+    <li><strong>INT8 / palettized 변형</strong> — 다운로드만 하면 10분</li>
+    <li><strong>입력 해상도 축소</strong> 518×392 → 448×336 → 392×294.
+      깊이는 저해상도에 놀랍게 관대하다. 어차피 업샘플한다</li>
+    <li><strong>f32 인터페이스를 f16으로</strong> — coremltools 재변환으로 가능한지 확인</li>
+    <li>그래도 부족하면 모델 교체(ZipDepth 6.1M) 또는 도메인 증류</li>
+  </ol>
+  <p>학습은 마지막 카드다. 웹캠 앞 상반신이라는 좁은 도메인으로 증류하면
+    같은 파라미터 수로 훨씬 선명해지지만, 그 전에 위 네 가지를 다 소진해야 한다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="repro">
+  <h2><span class="num">10</span>재현 절차</h2>
+  <p class="dek">여기 적힌 수치는 전부 아래 명령으로 다시 나온다.</p>
+
+  <pre><code><span class="cmt"># 0. Metal 셰이더 툴체인 (Xcode 26에서 별도 컴포넌트로 분리됨)</span>
+xcodebuild -downloadComponent MetalToolchain
+
+<span class="cmt"># 1. 모델 받기 + Core ML / Metal 4 양쪽 형식으로 변환 (~49 MB)</span>
+./Tools/fetch_models.sh
+
+<span class="cmt"># 2. 환경 전제조건 — Metal 4 지원, 텐서 생성, 카메라, Vision</span>
+xcrun swiftc -O -o /tmp/probe Tools/probe.swift && /tmp/probe
+
+<span class="cmt"># 3. 경로별 추론 벤치</span>
+xcrun swiftc -O -o /tmp/bench  Tools/bench_depth.swift  && /tmp/bench  Models/DepthAnythingV2SmallF16.mlmodelc
+xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/DepthAnythingV2Small.mtlpackage
+
+<span class="cmt"># 4. 전체 체인 + Core ML 교차검증 + PNG 출력</span>
+S=Delight/Delight/Shaders
+xcrun -sdk macosx metal -c $S/Preprocess.metal -o /tmp/pre.air -I $S
+xcrun -sdk macosx metal -c $S/Visualize.metal  -o /tmp/vis.air -I $S
+xcrun -sdk macosx metallib /tmp/pre.air /tmp/vis.air -o /tmp/delight.metallib
+xcrun swiftc -O -o /tmp/probe_p1 Tools/probe_p1.swift
+/tmp/probe_p1 /tmp/delight.metallib Models/DepthAnythingV2Small.mtlpackage /tmp/p1.png
+
+<span class="cmt"># 5. 앱 빌드</span>
+xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Debug build</code></pre>
+
+  <div class="call cool">
+    <span class="lbl">성능 기준선</span>
+    <p>M5 · 518×392 · 40회 median 기준으로 <strong>추론 15.4 ms, 전체 체인 15.6 ms</strong>다.
+      여기서 크게 벗어나면 회귀를 의심한다. 교차검증은 항상 <code>r = 1.00000</code>이어야 한다 —
+      1이 아니면 전처리나 인덱싱이 깨진 것이다.</p>
+  </div>
+</section>
+
+<footer>
+  <div>
+    <span>Delight · 손으로 잡는 조명</span>
+    <span>MIT License</span>
+    <span>영상은 이 맥을 벗어나지 않습니다</span>
+    <span><a href="https://github.com/jsonpassion/Delight">github.com/jsonpassion/Delight</a></span>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
