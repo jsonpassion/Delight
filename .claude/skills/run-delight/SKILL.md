@@ -38,6 +38,7 @@ open ~/Library/Developer/Xcode/DerivedData/Delight-*/Build/Products/Debug/Deligh
 | 프리뷰가 검은 화면 | `CVMetalTextureCache` 실패 또는 `kCVPixelBufferMetalCompatibilityKey` 누락 |
 | 셰이더 링크 에러 | Metal 툴체인 미설치 |
 | 빌드는 되는데 실행 즉시 종료 | entitlements와 Hardened Runtime 조합 확인 |
+| "Invalid metal package" | `ENABLE_APP_SANDBOX`가 YES로 돌아갔는지 확인. 샌드박스가 컨테이너 밖 Models/ 읽기를 막는다. 시작 로그의 `[Delight] 모델 자가진단` 줄을 볼 것 |
 
 ## 데모 안전장치
 

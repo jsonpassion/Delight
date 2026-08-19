@@ -61,6 +61,20 @@ final class RelightEngine {
             fatalError("Metal 지원 GPU를 찾을 수 없습니다.")
         }
         self.device = device
+
+        // 앱 시작 시 자가진단 — 모델 로딩은 카메라 권한과 무관하므로 미리 검증한다.
+        // 과거 사례: 템플릿 기본값 ENABLE_APP_SANDBOX=YES 가 컨테이너 밖 Models/ 읽기를 막아
+        // "Invalid metal package"로 나타났다. 이 로그가 그런 실패를 시작 전에 잡는다.
+        if let url = ModelLocator.mtlpackageURL() {
+            do {
+                _ = try device.makeLibrary(URL: url)
+                NSLog("[Delight] 모델 자가진단 OK: %@", url.lastPathComponent)
+            } catch {
+                NSLog("[Delight] 모델 자가진단 실패: %@ — %@", url.path, String(describing: error))
+            }
+        } else {
+            NSLog("[Delight] 모델을 찾지 못함 — Tools/fetch_models.sh 를 실행하세요")
+        }
     }
 
     // MARK: 수명주기
