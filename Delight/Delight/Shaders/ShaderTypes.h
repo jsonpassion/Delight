@@ -48,6 +48,7 @@ typedef struct {
 
     uint  enableAO;
     uint  enableSpecular;
+    uint  hasSegmentation;   // 0이면 깊이 기반 근사 매트로 폴백
 
     uint  lightCount;
     SunLight lights[4];
@@ -59,7 +60,7 @@ typedef struct {
 // 값을 바꿔야 한다면 Swift 쪽 MemoryLayout<...>.stride 를 찍어 확인할 것.
 #ifdef __METAL_VERSION__
 static_assert(sizeof(SunLight)    == 48,  "SunLight 레이아웃이 Swift 미러와 다르다");
-static_assert(sizeof(SunUniforms) == 288, "SunUniforms 레이아웃이 Swift 미러와 다르다");
+static_assert(sizeof(SunUniforms) == 304, "SunUniforms 레이아웃이 Swift 미러와 다르다");
 #endif
 
 #endif /* ShaderTypes_h */

@@ -78,6 +78,27 @@ final class LightRig {
     var translucency: Float = 0.6
     var detailStrength: Float = 0.4
 
+    /// 광원이 손끝보다 얼마나 카메라 쪽에 놓이는가(미터).
+    /// 0이면 손 안에 파묻혀 보이지 않는다. 항상 손 앞에 떠 있어야 "잡았다"가 성립한다.
+    static let handLeadDistance: Float = 0.07
+
+    /// 핀치를 막 시작했을 때 광원이 손끝으로 날아가는 속도(프레임당 보간율).
+    /// 낮을수록 부드럽지만 굼뜨다. 0.28이면 30fps에서 약 0.2초에 붙는다.
+    private static let snapRate: Float = 0.28
+    /// 핀치 유지 중 추종 속도. 손을 즉각 따라가야 "잡고 있다"는 감각이 산다.
+    private static let followRate: Float = 0.65
+
+    /// 직전 프레임에 핀치 중이었는가. 잡는 순간을 감지해 애니메이션을 시작한다.
+    private var wasPinching = false
+
+    /// 핀치 시작 시점의 손 크기와 그때 깊이맵이 말한 거리.
+    /// 이후에는 이 기준으로 손 크기 변화만 보고 거리를 추적한다.
+    private var referenceHandScale: Float = 0
+    private var referenceHandZ: Float = 0
+
+    /// 마지막으로 확정한 손 거리(미터). 손을 놓쳐도 이 값을 유지해 조명이 튀지 않는다.
+    private(set) var trackedHandZ: Float = 0.5
+
     /// 활성 광원. 핀치가 잡고 있는 대상.
     var activeIndex: Int = 0
     var active: PointLight? {
@@ -92,28 +113,84 @@ final class LightRig {
     ///   - handDepth: 손에서 읽은 정규화 역깊이(1에 가까울수록 카메라에 가까움). nil이면 z 유지.
     ///   - calibration: 초점거리 추정치
     ///   - pixelSize: 출력 해상도
+    ///   - affine: 역깊이를 미터로 되돌리는 계수. 손 깊이를 실제 거리로 환산할 때 쓴다.
+    ///   - isGrabbing: 핀치로 잡고 있는가. 잡는 순간이면 손끝으로 날아가는 애니메이션이 걸린다.
     func place(normalized: SIMD2<Float>,
                handDepth: Float?,
                calibration: CameraCalibration,
-               pixelSize: SIMD2<Float>) {
+               pixelSize: SIMD2<Float>,
+               affine: SIMD2<Float> = SIMD2<Float>(2.524, 0.333),
+               isGrabbing: Bool = false,
+               handScale: Float = 0) {
         guard lights.indices.contains(activeIndex) else { return }
 
         if let handDepth {
-            // 손이 카메라에 가까울수록(역깊이 큼) 광원을 앞으로 당긴다.
-            // 손을 멀리 뻗으면 광원이 얼굴 뒤로 넘어가 역광이 된다.
-            let t = 1 - min(max(handDepth, 0), 1)             // 0 = 가까움, 1 = 멂
-            depthOffset = min(max(Self.nearestOffset
-                        + t * (Self.farthestOffset - Self.nearestOffset),
-                        Self.nearestOffset), Self.farthestOffset)
+            let handZ = resolveHandDistance(inverseDepth: handDepth,
+                                            handScale: handScale,
+                                            isGrabbing: isGrabbing,
+                                            affine: affine)
+            trackedHandZ = handZ
+            // 광원은 손보다 **카메라 쪽**에 놓는다.
+            // 손 뒤에 두면 손에 가려 보이지 않는다 — 잡고 있다는 감각이 사라진다.
+            let lightZ = max(handZ - Self.handLeadDistance, 0.08)
+            depthOffset = min(max(lightZ - subjectDepth, Self.nearestOffset), Self.farthestOffset)
         }
 
         let z = max(subjectDepth + depthOffset, 0.05)
         let px = normalized.x * pixelSize.x
         let py = normalized.y * pixelSize.y
-        lights[activeIndex].position = SIMD3<Float>(
+        let target = SIMD3<Float>(
             (px - calibration.cx) / calibration.fx * z,
             (py - calibration.cy) / calibration.fy * z,
             z)
+
+        // 잡는 순간에는 천천히 날아가고, 잡고 있는 동안에는 즉각 따라간다.
+        // 마우스(isGrabbing = false)는 보간 없이 바로 놓는다 — 커서가 곧 광원이다.
+        if isGrabbing {
+            let rate = wasPinching ? Self.followRate : Self.snapRate
+            lights[activeIndex].position = mix(lights[activeIndex].position, target, t: rate)
+        } else {
+            lights[activeIndex].position = target
+        }
+        wasPinching = isGrabbing
+    }
+
+    /// 핀치를 놓았을 때 호출한다. 다음 핀치가 다시 "날아오는" 애니메이션으로 시작한다.
+    func releaseGrab() {
+        wasPinching = false
+        referenceHandScale = 0      // 다음 핀치에서 다시 캘리브레이션한다
+    }
+
+    /// 손까지의 거리를 미터로 정한다.
+    ///
+    /// **왜 깊이맵만 쓰면 안 되는가.**
+    /// 손을 머리 뒤로 가져가면 깊이맵의 그 픽셀은 손이 아니라 **머리**를 가리킨다.
+    /// 그대로 쓰면 광원이 머리 앞에 붙어 고정된다 — 뒤로 보내려는 의도와 정반대다.
+    /// 2.5D 깊이맵의 근본 한계이지 튜닝으로 풀 수 있는 문제가 아니다.
+    ///
+    /// 그래서 **가림에 영향받지 않는 손 크기**를 주 신호로 쓴다.
+    /// 손 크기는 1/Z에 비례하므로, 핀치 시작 시 깊이맵으로 스케일을 한 번 맞춰 두면
+    /// 이후에는 크기 변화만으로 거리를 추적할 수 있다.
+    private func resolveHandDistance(inverseDepth: Float,
+                                     handScale: Float,
+                                     isGrabbing: Bool,
+                                     affine: SIMD2<Float>) -> Float {
+        let depthZ = 1 / max(affine.x * min(max(inverseDepth, 0), 1) + affine.y, 1e-3)
+
+        // 손 크기를 못 읽으면 깊이맵으로 폴백한다(손이 프레임 경계에 걸린 경우 등).
+        guard handScale > 0.01 else { return depthZ }
+
+        // 핀치 시작 순간에만 깊이맵을 믿는다. 이때는 손이 앞에 나와 있어 가려질 일이 없다.
+        if !isGrabbing || referenceHandScale <= 0 {
+            referenceHandScale = handScale
+            referenceHandZ = depthZ
+            return depthZ
+        }
+
+        // 이후에는 크기 변화만 본다. 손이 작아 보이면 멀어진 것이다 — 가려져 있어도 성립한다.
+        let scaleRatio = referenceHandScale / max(handScale, 1e-4)
+        let estimated = referenceHandZ * scaleRatio
+        return min(max(estimated, 0.15), 3.0)
     }
 
     /// 셰이더 유니폼에 현재 상태를 싣는다.

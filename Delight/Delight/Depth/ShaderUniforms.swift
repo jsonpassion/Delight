@@ -47,6 +47,7 @@ struct SunUniforms {
 
     var enableAO: UInt32 = 1
     var enableSpecular: UInt32 = 1
+    var hasSegmentation: UInt32 = 0
 
     var lightCount: UInt32 = 1
     var lights: (SunLight, SunLight, SunLight, SunLight) = (SunLight(), SunLight(), SunLight(), SunLight())
