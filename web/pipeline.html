@@ -142,6 +142,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#depth">깊이: 상대성이라는 함정</a></li>
     <li><a href="#raymarch">그림자: POM과 같은 알고리즘</a></li>
     <li><a href="#backlight">역광: 빛이 뒤로 갔을 때</a></li>
+    <li><a href="#pinch">핀치: 손이 곧 컨트롤러</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
@@ -482,6 +483,63 @@ if (visible) glow += exp(-d*d*900.0) * lightColor * intensity;</code></pre>
     <p>손이 화면 안에 있으면 손도 깊이맵에 있다. 그래서 <strong>손 그림자가 뺨을 가로지른다.</strong>
       별도 구현이 없다 — 레이마칭이 손을 그냥 하나의 가림물로 취급할 뿐이다.
       같은 이유로 핀치의 z도 공짜다: 깊이맵을 손 위치에서 샘플하면 된다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="pinch">
+  <h2><span class="num">06-1</span>핀치: 손이 곧 컨트롤러</h2>
+  <p class="dek">센서를 하나도 더 쓰지 않고 3D 위치를 얻는 법.</p>
+
+  <h3>z를 어디서 가져오는가</h3>
+  <p>손으로 조명을 잡으려면 손의 <strong>3차원</strong> 위치가 필요하다. x·y는 Vision이 주지만
+    z는? 깊이 센서도, 스테레오도 없다. 답은 이미 갖고 있었다 —
+    <strong>손도 프레임 안에 있으므로 깊이맵이 손의 거리를 알고 있다.</strong>
+    핀치 지점에서 같은 깊이맵을 샘플하면 끝이다.</p>
+
+  <div class="call bad">
+    <span class="lbl">여기서 한 번 틀렸다</span>
+    <p>처음엔 핀치 지점의 한 픽셀을 그냥 읽으려 했다. <strong>손끝은 얇다.</strong>
+      깊이맵 해상도(518×392)에서 손가락 끝은 몇 픽셀이고, 그 주변은 전부 배경이다.
+      평균이나 중앙값을 쓰면 배경이 섞여 <strong>광원이 손보다 한참 뒤로 밀린다.</strong></p>
+    <p>해법은 <strong>가장 가까운 쪽 분위수</strong>다. 5×5 이웃을 정렬해 상위 20% 지점을 쓴다 —
+      역깊이는 클수록 가까우므로, 이 값은 "이 근방에서 카메라에 가장 가까운 것들"을 뜻한다.
+      손이 있으면 손을, 없으면 배경을 자연스럽게 고른다.</p>
+  </div>
+
+  <pre><code>neighborhood.sort()
+let index = min(Int(Float(neighborhood.count) * 0.8), neighborhood.count - 1)
+return neighborhood[index]   <span class="cmt">// 평균도 중앙값도 아닌 이유가 여기 있다</span></code></pre>
+
+  <h3>깊이 버퍼를 CPU가 읽게 하는 값</h3>
+  <p>이 샘플링에는 CPU 접근이 필요하다. 텐서를 <code>.private</code>에서 <code>.shared</code>로 바꿨는데,
+    보통은 성능 저하를 각오해야 하는 변경이다. 그런데 Apple Silicon은 통합 메모리라
+    <strong>측정해보니 차이가 없었다</strong>(15.1~15.6 ms로 동일). 추측 대신 재보고 결정했다.</p>
+
+  <h3>거울상의 함정 — 한쪽만 뒤집어야 한다</h3>
+  <p>프리뷰는 거울상이다. 사용자가 거울에 익숙하기 때문이다.
+    그러면 핀치 좌표도 뒤집어야 할까? <strong>아니다.</strong></p>
+  <ul>
+    <li><strong>핀치</strong>는 보정하지 <em>않는다</em>. 핀치 좌표와 렌더링이 둘 다 원본 카메라 좌표계이고
+      프리뷰에서 <em>함께</em> 뒤집히므로, 사용자 눈에는 손과 조명이 같은 자리에 보인다.</li>
+    <li><strong>마우스</strong>는 보정해야 <em>한다</em>. 사용자가 이미 뒤집힌 화면을 보고 찍기 때문이다.</li>
+  </ul>
+  <p>양쪽을 다 뒤집거나 다 안 뒤집으면 둘 중 하나가 반대로 간다.
+    그래서 보정은 <strong>마우스 입력 지점 한 곳에서만</strong> 한다.
+    이 규칙을 코드 주석에 못 박아두지 않으면 반드시 다시 틀린다.</p>
+
+  <h3>손 추적과 깊이 추론은 서로 기다리지 않는다</h3>
+  <p>둘 다 무거운 작업이다(Vision 수 ms, 추론 15 ms). 하나의 게이트로 묶으면
+    느린 쪽이 빠른 쪽을 끌어내린다. 그래서 <strong>독립된 in-flight 게이트</strong>를 두고
+    각자 자기 속도로 돌게 했다. 진행 중이면 새 프레임은 큐에 쌓지 않고 버린다 —
+    쌓으면 지연만 늘어난다.</p>
+
+  <div class="call good">
+    <span class="lbl">실측 (손 모드 26초)</span>
+    <pre style="margin:.5rem 0 0"><code>손=보임  핀치=잡음  깊이샘플 d=0.75~0.91  광원 z=0.30~1.50 m
+캡처 30fps · 깊이 18~19 ms · cam/depth/relit 모두 OK</code></pre>
+    <p style="margin-top:.6rem">z가 0.30~1.50 m를 오간다는 것은 <strong>정면광에서 완전한 역광까지
+      전 범위를 손으로 커버한다</strong>는 뜻이다.</p>
   </div>
 </section>
 
