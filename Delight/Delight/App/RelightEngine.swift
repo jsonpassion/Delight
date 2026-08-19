@@ -50,6 +50,9 @@ final class RelightEngine {
     /// 재조명 결과를 보여줄지. 끄면 원본 카메라가 나와 전후 비교가 된다.
     var showRelit = true
 
+    /// 최신 핀치 상태. HUD 피드백용.
+    private(set) var pinch = PinchState()
+
     // MARK: 구성 요소
 
     let device: MTLDevice
@@ -62,6 +65,8 @@ final class RelightEngine {
 
     private let processingQueue = DispatchQueue(label: "delight.depth", qos: .userInitiated)
     private let inFlight = InFlightGate()
+    /// 손 추적은 깊이 추론과 독립적으로 흐른다. 서로 기다리게 하면 둘 다 느려진다.
+    private let handInFlight = InFlightGate()
 
     init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -89,6 +94,8 @@ final class RelightEngine {
         // 3초마다 상태를 로그로 남긴다. CLI에서 파이프라인 전체를 검증할 때 쓴다.
         if ProcessInfo.processInfo.arguments.contains("--autostart") {
             Task { @MainActor in
+                // 손 경로까지 검증한다. 마우스만으로는 Vision·깊이샘플링이 안 돌아본다.
+                self.inputMode = .hand
                 self.start()
                 // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
                 // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
@@ -102,12 +109,16 @@ final class RelightEngine {
                                                               0.5 + 0.3 * sin(angle)))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@",
+                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
                         camera == nil ? "nil" : "OK",
                         depth == nil ? "nil" : "OK",
-                        relit == nil ? "nil" : "OK")
+                        relit == nil ? "nil" : "OK",
+                        (self.handTracker?.isHandVisible ?? false) ? "보임" : "없음",
+                        self.pinch.isPinching ? "잡음" : "놓음",
+                        self.pinch.normalizedDepth,
+                        self.lightRig.active?.position.z ?? 0)
                     NSLog("[Delight] %@", line)
                     // open(1)으로 실행되면 stderr를 받을 수 없으므로 파일에도 남긴다.
                     if let data = (line + "\n").data(using: .utf8),
@@ -136,6 +147,7 @@ final class RelightEngine {
             let capture = try CameraCapture(device: device)
             let store = frameStore
             let gate = inFlight
+            let handGate = handInFlight
             let queue = processingQueue
 
             capture.onFrame = { [weak self] frame in
@@ -144,6 +156,23 @@ final class RelightEngine {
 
                 // 추론이 아직 돌고 있으면 이 프레임은 버린다.
                 guard gate.tryEnter() else { return }
+
+                // 손 추적 — 깊이 추론과 병렬로 돈다.
+                if handGate.tryEnter() {
+                    Task { @MainActor [weak self] in
+                        guard let self, self.inputMode == .hand,
+                              let tracker = self.handTracker else {
+                            handGate.leave(); return
+                        }
+                        await tracker.process(pixelBuffer: frame.pixelBuffer) { point in
+                            // 핀치 지점의 깊이. 손도 프레임 안에 있으므로 별도 센서가 필요 없다.
+                            pipeline.sampleInverseDepth(
+                                atNormalized: SIMD2<Float>(Float(point.x), Float(point.y))) ?? 0.5
+                        }
+                        self.applyPinch(tracker.pinch)
+                        handGate.leave()
+                    }
+                }
 
                 // 광원 상태는 메인 액터가 소유하므로 값 타입 스냅샷으로 건넨다.
                 Task { @MainActor in
@@ -189,6 +218,18 @@ final class RelightEngine {
         var uniforms = SunUniforms()
         lightRig.fill(&uniforms)
         return uniforms
+    }
+
+    /// 핀치 상태를 광원에 반영한다.
+    ///
+    /// 거울상 보정은 하지 않는다 — 핀치 좌표와 렌더링이 **둘 다 원본 카메라 좌표계**이고,
+    /// 프리뷰에서 함께 뒤집히므로 사용자 눈에는 손과 조명이 같은 자리에 보인다.
+    /// (마우스는 사용자가 이미 뒤집힌 화면을 보고 찍으므로 보정이 필요하다 — ContentView 참조)
+    func applyPinch(_ pinch: PinchState) {
+        self.pinch = pinch
+        guard pinch.isPinching else { return }
+        moveLight(toNormalized: SIMD2<Float>(Float(pinch.position.x), Float(pinch.position.y)),
+                  handDepth: pinch.normalizedDepth)
     }
 
     /// 프리뷰 위 정규화 좌표로 광원을 옮긴다. 마우스와 핀치가 같은 경로를 쓴다.
