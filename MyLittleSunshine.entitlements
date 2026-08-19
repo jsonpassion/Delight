@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  샌드박스는 켜지 않는다.
+	  Syphon은 프로세스 간 IOSurface 공유가 필요하고, CMIO 카메라 확장 설치는
+	  앱이 /Applications에 있어야 하므로 샌드박스가 오히려 방해가 된다.
+	  App Store 배포로 방향을 바꾸면 그때 다시 판단한다.
+	-->
+
+	<!-- Hardened Runtime 상태에서 카메라 접근 -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+
+	<!--
+	  P7(CMIO Camera Extension)에서 아래를 활성화한다.
+	  Developer ID 서명 + 공증 + /Applications 설치 + 사용자 승인 + 재부팅이 함께 필요하다.
+	  (docs/00-feasibility.md §3 경로 1)
+
+	<key>com.apple.developer.system-extension.install</key>
+	<true/>
+	-->
+</dict>
+</plist>

@@ -1,0 +1,27 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# 모델 가중치 — 142MB이고 재생성 가능하다.
+# Tools/fetch_models.sh 로 받는다.
+Models/*
+!Models/.gitkeep
+!Models/README.md
+
+# 빌드 산출물
+*.air
+*.metallib
+*.o
+
+# 로컬 설정
+.claude/settings.local.json
