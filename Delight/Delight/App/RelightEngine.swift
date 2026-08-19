@@ -47,6 +47,9 @@ final class RelightEngine {
     /// 거울상 프리뷰. 손 인터랙션은 거울이 자연스럽다. 송출에는 적용하지 않는다.
     var isMirrored = true
 
+    /// 재조명 결과를 보여줄지. 끄면 원본 카메라가 나와 전후 비교가 된다.
+    var showRelit = true
+
     // MARK: 구성 요소
 
     let device: MTLDevice
@@ -93,12 +96,18 @@ final class RelightEngine {
                 for i in 0..<10 {
                     try? await Task.sleep(for: .seconds(3))
                     self.lightRig.depthOffset = offsets[i % offsets.count]
-                    let (camera, depth) = self.frameStore.latest()
+                    // 광원을 원 궤도로 돌려 조명이 실제로 화면을 바꾸는지 확인한다.
+                    let angle = Float(i) * 0.7
+                    self.moveLight(toNormalized: SIMD2<Float>(0.5 + 0.3 * cos(angle),
+                                                              0.5 + 0.3 * sin(angle)))
+                    let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@",
+                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
-                        camera == nil ? "nil" : "OK", depth == nil ? "nil" : "OK")
+                        camera == nil ? "nil" : "OK",
+                        depth == nil ? "nil" : "OK",
+                        relit == nil ? "nil" : "OK")
                     NSLog("[Delight] %@", line)
                     // open(1)으로 실행되면 stderr를 받을 수 없으므로 파일에도 남긴다.
                     if let data = (line + "\n").data(using: .utf8),
@@ -135,13 +144,20 @@ final class RelightEngine {
 
                 // 추론이 아직 돌고 있으면 이 프레임은 버린다.
                 guard gate.tryEnter() else { return }
-                queue.async {
-                    let start = CACurrentMediaTime()
-                    let result = pipeline.process(source: frame.texture)
-                    let elapsed = (CACurrentMediaTime() - start) * 1000
-                    if let result { store.publishDepth(result) }
-                    gate.leave()
-                    Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
+
+                // 광원 상태는 메인 액터가 소유하므로 값 타입 스냅샷으로 건넨다.
+                Task { @MainActor in
+                    let lighting = self?.currentLighting()
+                    queue.async {
+                        let start = CACurrentMediaTime()
+                        let result = pipeline.process(source: frame.texture, lighting: lighting)
+                        let elapsed = (CACurrentMediaTime() - start) * 1000
+                        if let result {
+                            store.publishResult(depth: result.depth, relit: result.relit)
+                        }
+                        gate.leave()
+                        Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
+                    }
                 }
             }
             self.capture = capture
@@ -167,6 +183,27 @@ final class RelightEngine {
         capture = nil
         status = .idle
     }
+
+    /// 현재 조명 상태를 셰이더 유니폼 스냅샷으로 만든다.
+    func currentLighting() -> SunUniforms {
+        var uniforms = SunUniforms()
+        lightRig.fill(&uniforms)
+        return uniforms
+    }
+
+    /// 프리뷰 위 정규화 좌표로 광원을 옮긴다. 마우스와 핀치가 같은 경로를 쓴다.
+    /// - Parameter normalized: 좌상단 원점 0…1. 거울상 보정은 호출부에서 끝낸 값이어야 한다.
+    func moveLight(toNormalized normalized: SIMD2<Float>, handDepth: Float? = nil) {
+        lightRig.place(normalized: normalized,
+                       handDepth: handDepth,
+                       calibration: calibration,
+                       pixelSize: SIMD2<Float>(Float(DepthPipeline.modelWidth),
+                                               Float(DepthPipeline.modelHeight)))
+    }
+
+    /// 초점거리 추정치. macOS는 내부파라미터를 주지 않아 추정값을 쓴다.
+    private(set) var calibration = CameraCalibration(width: DepthPipeline.modelWidth,
+                                                     height: DepthPipeline.modelHeight)
 }
 
 /// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 프레임 보관소.
@@ -176,16 +213,17 @@ nonisolated final class FrameStore: @unchecked Sendable {
     private let lock = NSLock()
     private var camera: CameraFrame?
     private var depth: MTLTexture?
+    private var relit: MTLTexture?
 
     func publishCamera(_ frame: CameraFrame) {
         lock.lock(); camera = frame; lock.unlock()
     }
-    func publishDepth(_ texture: MTLTexture) {
-        lock.lock(); depth = texture; lock.unlock()
+    func publishResult(depth: MTLTexture, relit: MTLTexture) {
+        lock.lock(); self.depth = depth; self.relit = relit; lock.unlock()
     }
-    func latest() -> (camera: MTLTexture?, depth: MTLTexture?) {
+    func latest() -> (camera: MTLTexture?, depth: MTLTexture?, relit: MTLTexture?) {
         lock.lock(); defer { lock.unlock() }
-        return (camera?.texture, depth)
+        return (camera?.texture, depth, relit)
     }
 }
 

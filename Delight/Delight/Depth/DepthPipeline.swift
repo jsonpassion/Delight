@@ -53,6 +53,8 @@ nonisolated final class DepthPipeline {
 
     private let preprocessPSO: any MTLComputePipelineState
     private let visualizePSO: any MTLComputePipelineState
+    private let gbufferPSO: any MTLComputePipelineState
+    private let relightPSO: any MTLComputePipelineState
     private let mlPSO: any MTL4MachineLearningPipelineState
     private let intermediatesHeap: MTLHeap
 
@@ -64,7 +66,15 @@ nonisolated final class DepthPipeline {
 
     /// 결과 텍스처 링. 렌더러가 읽는 동안 GPU가 다른 것에 쓴다.
     private var depthTextures: [MTLTexture] = []
+    private var relitTextures: [MTLTexture] = []
     private var writeIndex = 0
+
+    /// G버퍼 — 뷰공간 위치, 노멀, 피사체 마스크. 프레임 안에서만 쓰이므로 링이 필요 없다.
+    private let positionTexture: MTLTexture
+    private let normalTexture: MTLTexture
+    private let matteTexture: MTLTexture
+    /// AO는 P3에서 채운다. 그때까지 흰색(차폐 없음)으로 바인딩만 유지한다.
+    private let ambientOcclusionTexture: MTLTexture
 
     private let staticResidency: any MTLResidencySet
     /// 카메라 텍스처는 매 프레임 바뀐다 — 커맨드 버퍼 단위 레지던시로 처리한다.
@@ -94,6 +104,8 @@ nonisolated final class DepthPipeline {
         }
         self.preprocessPSO = try computePipeline("preprocess_to_tensor")
         self.visualizePSO  = try computePipeline("visualize_depth")
+        self.gbufferPSO    = try computePipeline("build_gbuffer")
+        self.relightPSO    = try computePipeline("relight")
 
         // ML 파이프라인
         let mlLibrary = try device.makeLibrary(URL: packageURL)
@@ -141,11 +153,29 @@ nonisolated final class DepthPipeline {
         textureDescriptor.usage = [.shaderRead, .shaderWrite]
         textureDescriptor.storageMode = .private
         for _ in 0..<3 {
-            guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
+            guard let depthTexture = device.makeTexture(descriptor: textureDescriptor),
+                  let relitTexture = device.makeTexture(descriptor: textureDescriptor) else {
                 throw DepthPipelineError.resourceAllocationFailed
             }
-            depthTextures.append(texture)
+            depthTextures.append(depthTexture)
+            relitTextures.append(relitTexture)
         }
+
+        // G버퍼. 위치는 미터 단위라 정밀도가 필요하다 — 16비트 부동소수점.
+        func makeGBuffer(_ format: MTLPixelFormat) throws -> MTLTexture {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: format, width: Self.modelWidth, height: Self.modelHeight, mipmapped: false)
+            descriptor.usage = [.shaderRead, .shaderWrite]
+            descriptor.storageMode = .private
+            guard let texture = device.makeTexture(descriptor: descriptor) else {
+                throw DepthPipelineError.resourceAllocationFailed
+            }
+            return texture
+        }
+        self.positionTexture = try makeGBuffer(.rgba16Float)
+        self.normalTexture   = try makeGBuffer(.rgba16Float)
+        self.matteTexture    = try makeGBuffer(.r8Unorm)
+        self.ambientOcclusionTexture = try makeGBuffer(.r8Unorm)
 
         let argumentDescriptor = MTL4ArgumentTableDescriptor()
         argumentDescriptor.maxBufferBindCount = 8
@@ -159,6 +189,11 @@ nonisolated final class DepthPipeline {
         staticResidency.addAllocation(uniformBuffer)
         staticResidency.addAllocation(heap)
         for texture in depthTextures { staticResidency.addAllocation(texture) }
+        for texture in relitTextures { staticResidency.addAllocation(texture) }
+        staticResidency.addAllocation(positionTexture)
+        staticResidency.addAllocation(normalTexture)
+        staticResidency.addAllocation(matteTexture)
+        staticResidency.addAllocation(ambientOcclusionTexture)
         staticResidency.commit()
         staticResidency.requestResidency()
 
@@ -187,13 +222,28 @@ nonisolated final class DepthPipeline {
         uniforms.cy = Float(outputHeight) / 2
     }
 
-    /// 한 프레임을 처리하고 깊이 시각화 텍스처를 돌려준다.
-    /// GPU 완료까지 기다리므로 **전용 스레드에서 호출할 것**.
-    func process(source: MTLTexture) -> MTLTexture? {
+    /// 한 프레임을 처리한다. GPU 완료까지 기다리므로 **전용 스레드에서 호출할 것**.
+    /// - Parameter lighting: 메인 액터의 LightRig가 채운 스냅샷. 값 타입이라 그대로 건너온다.
+    /// - Returns: 깊이 시각화와 재조명 결과.
+    func process(source: MTLTexture,
+                 lighting: SunUniforms? = nil) -> (depth: MTLTexture, relit: MTLTexture)? {
+        if let lighting {
+            // 해상도·텐서 레이아웃은 파이프라인이 소유한다. 조명 쪽 값만 받아들인다.
+            var merged = lighting
+            merged.depthWidth = uniforms.depthWidth
+            merged.depthHeight = uniforms.depthHeight
+            merged.depthRowStride = uniforms.depthRowStride
+            merged.outputWidth = uniforms.outputWidth
+            merged.outputHeight = uniforms.outputHeight
+            merged.cx = uniforms.cx
+            merged.cy = uniforms.cy
+            uniforms = merged
+        }
         uniformBuffer.contents().copyMemory(
             from: &uniforms, byteCount: MemoryLayout<SunUniforms>.stride)
 
         let target = depthTextures[writeIndex]
+        let relitTarget = relitTextures[writeIndex]
         writeIndex = (writeIndex + 1) % depthTextures.count
 
         // 카메라 텍스처는 CVMetalTextureCache가 돌려쓰므로 매 프레임 레지던시를 갱신한다.
@@ -245,6 +295,42 @@ nonisolated final class DepthPipeline {
             encoder.endEncoding()
         }
 
+        // [C3] 지오메트리 — 역깊이 → 뷰공간 위치·5-tap 노멀·피사체 마스크
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            argumentTable.setAddress(depthBuffer.gpuAddress, index: 0)
+            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 1)
+            argumentTable.setTexture(source.gpuResourceID, index: 0)
+            argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
+            argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
+            argumentTable.setTexture(matteTexture.gpuResourceID, index: 3)
+            encoder.setArgumentTable(argumentTable)
+            encoder.setComputePipelineState(gbufferPSO)
+            encoder.dispatchThreads(
+                threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
+                            visibilityOptions: .device)
+            encoder.endEncoding()
+        }
+
+        // [C5] 리라이팅 — 레이마칭 그림자 + 확산 + 스펙큘러 + 역광
+        // relight 커널은 유니폼을 buffer(0)에서 읽는다(다른 커널과 인덱스가 다르다).
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 0)
+            argumentTable.setTexture(source.gpuResourceID, index: 0)
+            argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
+            argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
+            argumentTable.setTexture(matteTexture.gpuResourceID, index: 3)
+            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 4)
+            argumentTable.setTexture(relitTarget.gpuResourceID, index: 5)
+            encoder.setArgumentTable(argumentTable)
+            encoder.setComputePipelineState(relightPSO)
+            encoder.dispatchThreads(
+                threadsPerGrid: MTLSize(width: relitTarget.width, height: relitTarget.height, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            encoder.endEncoding()
+        }
+
         commandBuffer.endCommandBuffer()
         queue.commit([commandBuffer])
 
@@ -252,7 +338,7 @@ nonisolated final class DepthPipeline {
         queue.signalEvent(event, value: signalValue)
         guard event.wait(untilSignaledValue: signalValue, timeoutMS: 2000) else { return nil }
 
-        return target
+        return (depth: target, relit: relitTarget)
     }
 
     // MARK: 텐서
