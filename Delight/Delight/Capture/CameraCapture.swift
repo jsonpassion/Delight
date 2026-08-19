@@ -23,6 +23,7 @@ enum CaptureError: LocalizedError {
     case cannotAddInput
     case cannotAddOutput
     case textureCacheFailed
+    case permissionDenied
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +31,8 @@ enum CaptureError: LocalizedError {
         case .cannotAddInput:      return "카메라 입력을 세션에 추가하지 못했습니다."
         case .cannotAddOutput:     return "비디오 출력을 세션에 추가하지 못했습니다."
         case .textureCacheFailed:  return "Metal 텍스처 캐시를 만들지 못했습니다."
+        case .permissionDenied:
+            return "카메라 접근이 거부되었습니다. 시스템 설정 → 개인정보 보호 및 보안 → 카메라에서 Delight를 허용한 뒤 다시 시도하세요."
         }
     }
 }
@@ -91,7 +94,20 @@ final class CameraCapture: NSObject {
         availableCameras().first
     }
 
-    func start() throws {
+    /// 권한을 먼저 확보한 뒤 세션을 시작한다.
+    /// .notDetermined 상태에서 startRunning을 하면 프롬프트가 떠도
+    /// 이미 시작된 세션에는 프레임이 오지 않는다 — 순서가 중요하다.
+    func start() async throws {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                throw CaptureError.permissionDenied
+            }
+        default:
+            throw CaptureError.permissionDenied
+        }
         queue.async { [session] in
             if !session.isRunning { session.startRunning() }
         }
