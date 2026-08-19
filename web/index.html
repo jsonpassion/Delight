@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Little Sunshine — 손으로 잡는 조명</title>
+<meta name="description" content="핀치로 3D 공간의 광원을 집어 옮기면 웹캠 영상이 그 조명으로 다시 렌더링됩니다. macOS · Metal 4 · 실시간.">
+<meta property="og:title" content="My Little Sunshine">
+<meta property="og:description" content="손으로 잡는 조명. 실시간 웹캠 리라이팅 for macOS.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root{
+  --ground:#EBECF1; --surface:#fff; --sunken:#E2E4EA;
+  --ink:#14171C; --muted:#5A6170; --faint:#858C9A; --rule:#D3D7DF;
+  --key:#9E570F; --key-soft:#F6EADA; --fill:#2C6183;
+  --f-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Source Serif 4",Georgia,serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0F1216; --surface:#171B21; --sunken:#12161B;
+  --ink:#E6E9EF; --muted:#99A1AF; --faint:#6E7785; --rule:#272D36;
+  --key:#F0A94F; --key-soft:#2A2016; --fill:#7FB4D6;
+}}
+:root[data-theme="dark"]{
+  --ground:#0F1216; --surface:#171B21; --sunken:#12161B;
+  --ink:#E6E9EF; --muted:#99A1AF; --faint:#6E7785; --rule:#272D36;
+  --key:#F0A94F; --key-soft:#2A2016; --fill:#7FB4D6;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--f-body);font-size:17px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.5rem}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--key);margin:0}
+h1{font-family:var(--f-display);font-weight:800;font-size:clamp(2.6rem,7vw,4.6rem);line-height:.98;letter-spacing:-.03em;margin:.6rem 0 0;text-wrap:balance}
+h2{font-family:var(--f-display);font-weight:700;font-size:1.6rem;letter-spacing:-.02em;margin:0 0 .4rem;text-wrap:balance}
+h3{font-family:var(--f-display);font-weight:600;font-size:1rem;margin:0 0 .3rem}
+p{margin:0 0 1rem}
+a{color:var(--fill)}
+header{padding:4.5rem 0 2.5rem;border-bottom:1px solid var(--rule);background:var(--surface)}
+.lede{font-size:1.16rem;color:var(--muted);max-width:44ch;margin-top:1.1rem}
+.lede strong{color:var(--ink);font-weight:600}
+section{padding:3.25rem 0}
+.stage{background:var(--surface);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+canvas{display:block;width:100%;height:auto;background:#000;cursor:grab;touch-action:none}
+canvas:active{cursor:grabbing}
+.stagebar{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;align-items:center;padding:.75rem 1rem;border-top:1px solid var(--rule);font-family:var(--f-mono);font-size:.74rem;color:var(--faint)}
+.stagebar label{display:flex;align-items:center;gap:.5rem}
+input[type=range]{accent-color:var(--key);width:7rem}
+.hint{color:var(--key)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.cell{background:var(--surface);padding:1.3rem 1.4rem}
+.cell p{font-size:.95rem;color:var(--muted);margin:0}
+table{width:100%;border-collapse:collapse;font-family:var(--f-mono);font-size:.82rem;font-variant-numeric:tabular-nums;background:var(--surface)}
+th{text-align:left;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:.7rem .9rem;border-bottom:1px solid var(--rule)}
+td{padding:.6rem .9rem;border-bottom:1px solid var(--rule)}
+tr:last-child td{border-bottom:0}
+td.n{text-align:right}
+tr.lead td{background:var(--key-soft);color:var(--key);font-weight:600}
+.tw{border:1px solid var(--rule);border-radius:6px;overflow:hidden auto}
+.cta{display:inline-flex;align-items:center;gap:.5rem;font-family:var(--f-display);font-weight:600;font-size:.95rem;text-decoration:none;color:var(--ground);background:var(--ink);padding:.7rem 1.2rem;border-radius:5px}
+.cta.ghost{background:transparent;color:var(--ink);border:1px solid var(--rule)}
+.ctas{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:1.6rem}
+footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem 0;font-family:var(--f-mono);font-size:.72rem;color:var(--faint)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <p class="eyebrow">macOS · Metal 4 · 실시간</p>
+    <h1>손으로 잡는 조명</h1>
+    <p class="lede">핀치로 3D 공간의 광원을 집어 옮기면, 웹캠 영상이 그 조명으로 다시 렌더링됩니다.
+      가까운 물체가 빛을 가리고, 피부에 반사광이 뜹니다. <strong>결과는 Zoom에 카메라로 들어갑니다.</strong></p>
+    <div class="ctas">
+      <a class="cta" href="https://github.com/jsonpassion/MyLittleSunshine">GitHub에서 보기</a>
+      <a class="cta ghost" href="#how">어떻게 되나요</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>직접 끌어보세요</h2>
+    <p style="color:var(--muted);margin-bottom:1.2rem">아래는 앱과 같은 원리를 축소한 것입니다 — 높이장 위에서 광선을 진행시켜
+      그림자를 계산합니다. 광원을 끌면 코 그림자가 따라 움직이고, 앞으로 당기면 가까운 면만 밝아집니다.</p>
+
+    <div class="stage">
+      <canvas id="demo" width="480" height="300" aria-label="드래그로 조명을 옮기는 인터랙티브 데모"></canvas>
+      <div class="stagebar">
+        <span class="hint">↔ 드래그로 조명 이동</span>
+        <label>깊이 <input id="depth" type="range" min="10" max="180" value="70"></label>
+        <label>세기 <input id="power" type="range" min="20" max="200" value="110"></label>
+        <label>두께 <input id="thick" type="range" min="2" max="60" value="18"></label>
+        <span id="readout"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>어떻게 되나요</h2>
+    <div class="grid">
+      <div class="cell">
+        <h3>깊이를 추정합니다</h3>
+        <p>단안 깊이 모델이 매 프레임 장면의 형태를 복원합니다. Apple M5에서 15.4ms — 추론·라이팅·드로우가
+          하나의 Metal 커맨드 버퍼 안에서 돕니다. 추론 결과가 GPU 메모리를 떠나지 않습니다.</p>
+      </div>
+      <div class="cell">
+        <h3>광선을 쏩니다</h3>
+        <p>복원된 높이장 위에서 각 픽셀로부터 광원까지 광선을 진행시킵니다. 중간에 무언가 가로막으면
+          그 픽셀은 그림자입니다. 카메라에 가까운 물체가 실제로 빛을 가립니다.</p>
+      </div>
+      <div class="cell">
+        <h3>손이 곧 컨트롤러입니다</h3>
+        <p>손도 화면 안에 있으니 깊이맵이 이미 손의 깊이를 알고 있습니다. 별도 센서가 필요 없고,
+          같은 이유로 손 그림자가 뺨을 가로지릅니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>측정값</h2>
+    <p style="color:var(--muted);margin-bottom:1.2rem">Apple M5, Depth Anything V2-small, 518×392, 40회 median.</p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>추론 경로</th><th class="n">median</th><th class="n">fps</th></tr></thead>
+        <tbody>
+          <tr class="lead"><td>Metal 4 ML 인코더 (GPU 타임라인)</td><td class="n">15.42 ms</td><td class="n">64.9</td></tr>
+          <tr><td>Core ML (Neural Engine)</td><td class="n">20.78 ms</td><td class="n">48.1</td></tr>
+          <tr><td>Core ML (CPU only)</td><td class="n">45.10 ms</td><td class="n">22.2</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">MIT License · 영상은 이 맥을 벗어나지 않습니다 · <a href="https://github.com/jsonpassion/MyLittleSunshine">github.com/jsonpassion/MyLittleSunshine</a></div>
+</footer>
+
+<script>
+(() => {
+  const canvas = document.getElementById('demo');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const W = 240, H = 150;                    // 내부 버퍼. 화면에는 2배로 확대된다.
+  const image = ctx.createImageData(W, H);
+  const height = new Float32Array(W * H);    // 높이장 (카메라에 가까울수록 큼)
+  const albedo = new Float32Array(W * H * 3);
+
+  // --- 장면을 한 번만 만든다: 머리(타원체) + 코(융기) + 배경 평면 ---
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      const nx = (x - W * 0.5) / (W * 0.30);
+      const ny = (y - H * 0.60) / (H * 0.46);
+      const r2 = nx * nx + ny * ny;
+
+      let h = 0, tint = 0.42;                // 배경
+      if (r2 < 1) {
+        h = Math.sqrt(1 - r2) * 34;          // 머리
+        tint = 0.74;
+        const dnx = (x - W * 0.5) / (W * 0.035);
+        const dny = (y - H * 0.60) / (H * 0.075);
+        const nose = Math.exp(-(dnx * dnx + dny * dny));
+        h += nose * 13;                       // 코 — 그림자를 만드는 주인공
+      }
+      height[i] = h;
+      albedo[i * 3]     = tint * 1.00;
+      albedo[i * 3 + 1] = tint * 0.93;
+      albedo[i * 3 + 2] = tint * 0.88;
+    }
+  }
+
+  const sampleHeight = (x, y) => {
+    const xi = x | 0, yi = y | 0;
+    if (xi < 0 || yi < 0 || xi >= W || yi >= H) return -1e9;
+    return height[yi * W + xi];
+  };
+
+  const light = { x: W * 0.74, y: H * 0.28, z: 70 };
+  let power = 1.1, thickness = 18;
+
+  function render() {
+    const data = image.data;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const h = height[i];
+
+        // 노멀: 이웃 높이차. (앱은 5-tap으로 실루엣까지 정확하게 처리한다)
+        const hl = sampleHeight(x - 1, y), hr = sampleHeight(x + 1, y);
+        const hd = sampleHeight(x, y - 1), hu = sampleHeight(x, y + 1);
+        let nx = (hl - hr) * 0.5, ny = (hd - hu) * 0.5, nz = 1;
+        const nl = Math.hypot(nx, ny, nz);
+        nx /= nl; ny /= nl; nz /= nl;
+
+        // 광원 방향
+        let lx = light.x - x, ly = light.y - y, lz = light.z - h;
+        const ld = Math.hypot(lx, ly, lz) || 1;
+        lx /= ld; ly /= ld; lz /= ld;
+
+        let ndl = nx * lx + ny * ly + nz * lz;
+        if (ndl < 0) ndl = 0;
+
+        // 레이마칭 그림자 — 앱과 같은 원리.
+        // thickness가 크면 화면이 검게 죽고, 작으면 그림자가 안 생긴다.
+        let shadow = 1;
+        if (ndl > 0) {
+          const steps = 14, step = ld / steps;
+          let px = x, py = y, pz = h;
+          for (let s = 1; s <= steps; s++) {
+            px += lx * step; py += ly * step; pz += lz * step;
+            if (px < 0 || py < 0 || px >= W || py >= H) break;
+            const scene = sampleHeight(px, py);
+            const delta = scene - pz;              // 씬이 광선보다 앞에 있으면 가림
+            if (delta > 0.6 && delta < thickness) { shadow = 0.12; break; }
+          }
+        }
+
+        const atten = 1 / (1 + (ld * ld) / 26000);
+        const lit = ndl * atten * shadow * power;
+
+        // 원본을 환경광으로 보존하고 가상광의 기여만 더한다 (delta lighting).
+        const amb = 0.16;
+        let r = albedo[i * 3]     * (amb + lit * 1.00);
+        let g = albedo[i * 3 + 1] * (amb + lit * 0.84);
+        let b = albedo[i * 3 + 2] * (amb + lit * 0.62);
+
+        // 톤매핑 — 가산 조명이라 클리핑이 쉽게 난다.
+        r = r / (1 + r); g = g / (1 + g); b = b / (1 + b);
+
+        const o = i * 4;
+        data[o]     = Math.min(255, r * 340);
+        data[o + 1] = Math.min(255, g * 340);
+        data[o + 2] = Math.min(255, b * 340);
+        data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    ctx.drawImage(canvas, 0, 0, W, H, 0, 0, canvas.width, canvas.height);
+
+    // 광원 표시
+    const sx = light.x / W * canvas.width, sy = light.y / H * canvas.height;
+    const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, 34);
+    glow.addColorStop(0, 'rgba(255,205,130,.95)');
+    glow.addColorStop(1, 'rgba(255,205,130,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(sx, sy, 34, 0, Math.PI * 2); ctx.fill();
+
+    document.getElementById('readout').textContent =
+      `z ${light.z.toFixed(0)} · thickness ${thickness.toFixed(0)}`;
+  }
+
+  // --- 입력 ---
+  let dragging = false;
+  const moveLight = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    light.x = (p.clientX - rect.left) / rect.width * W;
+    light.y = (p.clientY - rect.top) / rect.height * H;
+    render();
+  };
+  canvas.addEventListener('pointerdown', e => { dragging = true; canvas.setPointerCapture(e.pointerId); moveLight(e); });
+  canvas.addEventListener('pointermove', e => { if (dragging) moveLight(e); });
+  canvas.addEventListener('pointerup',   e => { dragging = false; });
+
+  document.getElementById('depth').addEventListener('input', e => { light.z = +e.target.value; render(); });
+  document.getElementById('power').addEventListener('input', e => { power = +e.target.value / 100; render(); });
+  document.getElementById('thick').addEventListener('input', e => { thickness = +e.target.value; render(); });
+
+  render();
+})();
+</script>
+</body>
+</html>
