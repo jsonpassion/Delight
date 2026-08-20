@@ -71,6 +71,13 @@ final class RelightEngine {
     private let handInFlight = InFlightGate()
     /// 세그멘테이션도 마찬가지. 실루엣은 천천히 변하므로 15Hz로 충분하다.
     private let matteInFlight = InFlightGate()
+    /// Vision 모델 첫 로드가 끝날 때까지 스트림 투입을 막는다.
+    ///
+    /// 세그멘테이션과 핸드포즈가 **동시에** 첫 로드를 하면 Espresso(ANE 런타임)의
+    /// 커널 등록이 레이스해 힙 손상으로 죽는 일이 간헐적으로 있었다
+    /// (크래시 리포트: Espresso::ANERuntimeEngine::register_kernels → malloc EXC_BREAKPOINT).
+    /// 시작 시 더미 입력으로 하나씩 순서대로 초기화한 뒤에 게이트를 연다.
+    private let visionWarmedUp = InFlightGate()   // tryEnter 성공 = 아직 워밍업 안 끝남
     private let matteQueue = DispatchQueue(label: "delight.matte", qos: .userInitiated)
 
     init() {
@@ -104,16 +111,14 @@ final class RelightEngine {
                 self.start()
                 // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
                 // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
-                // 안정화 A/B — 앞 5회는 off, 뒤 5회는 on. 플리커 지표로 효과를 잰다.
-                let offsets: [Float] = [-0.3, 0.0, 0.4, 0.9, -0.15]
-                for i in 0..<10 {
-                    self.lightRig.temporalBlend = i < 5 ? 0.0 : 0.85
+                // 진단 루프는 **관측만 한다.**
+                // 이전에는 여기서 3초마다 lightRig를 흔들어 A/B를 쟀는데,
+                // 그 쓰기가 SwiftUI 레이아웃과 경쟁해 진단 도구 자체가 크래시를 만들었다.
+                // A/B가 필요하면 --stabilize-off 로 고정해 두 번 돌린다.
+                self.lightRig.temporalBlend =
+                    ProcessInfo.processInfo.arguments.contains("--stabilize-off") ? 0.0 : 0.85
+                for tick in 0..<10 {
                     try? await Task.sleep(for: .seconds(3))
-                    self.lightRig.depthOffset = offsets[i % offsets.count]
-                    // 광원을 원 궤도로 돌려 조명이 실제로 화면을 바꾸는지 확인한다.
-                    let angle = Float(i) * 0.7
-                    self.moveLight(toNormalized: SIMD2<Float>(0.5 + 0.3 * cos(angle),
-                                                              0.5 + 0.3 * sin(angle)))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
                         format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 플리커=%.5f 손=%@ 핀치=%@ d=%.2f z=%.2f",
@@ -130,7 +135,7 @@ final class RelightEngine {
                         self.pinch.normalizedDepth,
                         self.lightRig.active?.position.z ?? 0)
                     NSLog("[Delight] %@", line)
-                    if i == 4, let pipeline = self.depthPipeline {
+                    if tick == 4, let pipeline = self.depthPipeline {
                         let ok = pipeline.dumpRelit(to: "/tmp/delight_relit.png")
                         NSLog("[Delight] 재조명 결과 덤프: %@", ok ? "OK" : "실패")
                     }
@@ -159,6 +164,14 @@ final class RelightEngine {
             self.depthPipeline = pipeline
 
             let capture = try CameraCapture(device: device)
+            capture.onInterruption = { [weak self] reason in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.status = .failed(reason + " — 다시 시작하면 사용 가능한 카메라로 연결합니다.")
+                    NSLog("[Delight] 캡처 중단: %@", reason)
+                    self.capture = nil      // 다음 start()가 장치를 새로 고른다
+                }
+            }
             let store = frameStore
             let gate = inFlight
             let handGate = handInFlight
@@ -167,7 +180,10 @@ final class RelightEngine {
             let matteWork = matteQueue
             // 콜백이 값을 캡처하므로 **여기서 먼저** 만들어야 한다.
             // 나중에 만들면 콜백은 nil을 붙잡은 채로 남는다.
-            let matteProvider = PersonMatte(device: device)
+            let visionReady = OpenFlag()
+            // --no-matte: 세그멘테이션 격리 실험용. 크래시 이등분에 쓴다.
+            let matteProvider = ProcessInfo.processInfo.arguments.contains("--no-matte")
+                ? nil : PersonMatte(device: device)
             self.personMatte = matteProvider
             if matteProvider == nil {
                 NSLog("[Delight] 인물 세그멘테이션 초기화 실패 — 깊이 기반 근사 매트로 폴백")
@@ -182,7 +198,7 @@ final class RelightEngine {
 
                 // 인물 세그멘테이션 — 15Hz(PersonMatte가 스스로 제한한다).
                 // 메인 액터를 거치지 않는다. 프레임마다 Task를 만들면 UI 트랜잭션과 경쟁한다.
-                if let matte = matteProvider, matteGate.tryEnter() {
+                if visionReady.isOpen, let matte = matteProvider, matteGate.tryEnter() {
                     matteWork.async {
                         matte.process(pixelBuffer: frame.pixelBuffer)
                         matteGate.leave()
@@ -190,7 +206,7 @@ final class RelightEngine {
                 }
 
                 // 손 추적 — 깊이 추론과 병렬로 돈다.
-                if handGate.tryEnter() {
+                if visionReady.isOpen, handGate.tryEnter() {
                     Task { @MainActor [weak self] in
                         guard let self, self.inputMode == .hand,
                               let tracker = self.handTracker else {
@@ -226,7 +242,24 @@ final class RelightEngine {
                 }
             }
             self.capture = capture
-            self.handTracker = HandTracker()
+            let tracker = HandTracker()
+            self.handTracker = tracker
+
+            // Vision 워밍업 — 더미 프레임으로 하나씩, 순서대로. (visionWarmedUp 주석 참조)
+            // 캡처 시작 전에 끝내야 Metal 4 ML 초기화와 겹치지 않는다.
+            matteQueue.async {
+                if let dummy = Self.makeDummyPixelBuffer() {
+                    matteProvider?.warmUp(with: dummy)
+                    let semaphore = DispatchSemaphore(value: 0)
+                    Task.detached {
+                        _ = await tracker.process(pixelBuffer: dummy)
+                        semaphore.signal()
+                    }
+                    _ = semaphore.wait(timeout: .now() + 5)
+                }
+                visionReady.open()
+                NSLog("[Delight] Vision 워밍업 완료")
+            }
             Task { @MainActor in
                 do {
                     try await capture.start()
@@ -320,6 +353,25 @@ nonisolated final class FrameStore: @unchecked Sendable {
     func latest() -> (camera: MTLTexture?, depth: MTLTexture?, relit: MTLTexture?) {
         lock.lock(); defer { lock.unlock() }
         return (camera?.texture, depth, relit)
+    }
+}
+
+/// 한 번 열리면 계속 열려 있는 플래그.
+nonisolated final class OpenFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    var isOpen: Bool { lock.lock(); defer { lock.unlock() }; return opened }
+    func open() { lock.lock(); opened = true; lock.unlock() }
+}
+
+/// 더미 프레임 생성 — Vision 워밍업용.
+extension RelightEngine {
+    nonisolated static func makeDummyPixelBuffer() -> CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary,
+                            &buffer)
+        return buffer
     }
 }
 
