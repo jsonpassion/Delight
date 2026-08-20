@@ -38,7 +38,8 @@ nonisolated final class HandTracker: @unchecked Sendable {
     ///   손끝은 얇아서 깊이가 배경으로 새므로, 구현은 이웃의 "가장 가까운 쪽" 분위수를 써야 한다.
     /// - Returns: 갱신된 핀치 상태. 손을 놓쳤으면 nil(호출부는 마지막 상태를 유지한다).
     func process(pixelBuffer: CVPixelBuffer,
-                 depthSampler: ((CGPoint) -> Float)? = nil) async -> PinchState? {
+                 depthSampler: ((CGPoint) -> (depth: Float, reliable: Bool))? = nil)
+        async -> PinchState? {
 
         guard let observations = try? await request.perform(on: pixelBuffer),
               let hand = observations.first else {
@@ -73,9 +74,10 @@ nonisolated final class HandTracker: @unchecked Sendable {
         lock.unlock()
 
         if let depthSampler {
-            next.normalizedDepth = depthSampler(midpoint)
+            let sample = depthSampler(midpoint)
+            next.normalizedDepth = sample.depth
+            next.depthIsReliable = sample.reliable
         }
-        next.handScale = Self.apparentHandSize(hand) ?? 0
         return next
     }
 

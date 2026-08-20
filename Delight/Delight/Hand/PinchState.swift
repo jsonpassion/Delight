@@ -16,9 +16,12 @@ struct PinchState: Equatable {
     /// 손을 머리 뒤로 가져가면 머리 깊이를 읽는다. 단독으로 신뢰하면 안 된다.
     var normalizedDepth: Float = 0.5
 
-    /// 손의 겉보기 크기(정규화 화면 단위). 1/Z에 비례한다.
-    /// 가림에 영향받지 않으므로 손이 머리 뒤로 가도 거리를 알 수 있다.
-    var handScale: Float = 0
+    /// 핀치 지점의 깊이를 믿어도 되는가.
+    ///
+    /// 손이 무언가에 가려지기 시작하면 깊이맵의 그 지점은 손이 아니라 **가린 물체**를 읽는다.
+    /// 이웃 깊이의 퍼짐이 크면(가림 경계) 신뢰하지 않고 광원을 그대로 둔다.
+    /// 추측해서 옮기면 광원이 오브젝트 앞에 붙어버린다.
+    var depthIsReliable = true
     /// 엄지–검지 정규화 거리. UI 피드백용.
     var separation: Float = 1.0
     var confidence: Float = 0

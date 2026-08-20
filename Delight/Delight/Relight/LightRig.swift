@@ -89,21 +89,7 @@ final class LightRig {
     /// 0이면 손 안에 파묻혀 보이지 않는다. 항상 손 앞에 떠 있어야 "잡았다"가 성립한다.
     static let handLeadDistance: Float = 0.07
 
-    /// 핀치를 막 시작했을 때 광원이 손끝으로 날아가는 속도(프레임당 보간율).
-    /// 낮을수록 부드럽지만 굼뜨다. 0.28이면 30fps에서 약 0.2초에 붙는다.
-    private static let snapRate: Float = 0.28
-    /// 핀치 유지 중 추종 속도. 손을 즉각 따라가야 "잡고 있다"는 감각이 산다.
-    private static let followRate: Float = 0.65
-
-    /// 직전 프레임에 핀치 중이었는가. 잡는 순간을 감지해 애니메이션을 시작한다.
-    private var wasPinching = false
-
-    /// 핀치 시작 시점의 손 크기와 그때 깊이맵이 말한 거리.
-    /// 이후에는 이 기준으로 손 크기 변화만 보고 거리를 추적한다.
-    private var referenceHandScale: Float = 0
-    private var referenceHandZ: Float = 0
-
-    /// 마지막으로 확정한 손 거리(미터). 손을 놓쳐도 이 값을 유지해 조명이 튀지 않는다.
+    /// 마지막으로 확정한 손 거리(미터). 진단용.
     private(set) var trackedHandZ: Float = 0.5
 
     /// 광원이 켜져 있는가.
@@ -134,15 +120,11 @@ final class LightRig {
                calibration: CameraCalibration,
                pixelSize: SIMD2<Float>,
                affine: SIMD2<Float> = SIMD2<Float>(2.524, 0.333),
-               isGrabbing: Bool = false,
-               handScale: Float = 0) {
+               isGrabbing: Bool = false) {
         guard lights.indices.contains(activeIndex) else { return }
 
         if let handDepth {
-            let handZ = resolveHandDistance(inverseDepth: handDepth,
-                                            handScale: handScale,
-                                            isGrabbing: isGrabbing,
-                                            affine: affine)
+            let handZ = resolveHandDistance(inverseDepth: handDepth, affine: affine)
             trackedHandZ = handZ
             // 광원은 손보다 **카메라 쪽**에 놓는다.
             // 손 뒤에 두면 손에 가려 보이지 않는다 — 잡고 있다는 감각이 사라진다.
@@ -158,53 +140,23 @@ final class LightRig {
             (py - calibration.cy) / calibration.fy * z,
             z)
 
-        // 잡는 순간에는 천천히 날아가고, 잡고 있는 동안에는 즉각 따라간다.
-        // 마우스(isGrabbing = false)는 보간 없이 바로 놓는다 — 커서가 곧 광원이다.
-        if isGrabbing {
-            let rate = wasPinching ? Self.followRate : Self.snapRate
-            lights[activeIndex].position = mix(lights[activeIndex].position, target, t: rate)
-        } else {
-            lights[activeIndex].position = target
-        }
-        wasPinching = isGrabbing
+        // 보간하지 않는다. 손이 있는 곳에 광원이 있어야 한다 —
+        // 날아가는 애니메이션은 그 사이 프레임에서 광원이 손과 다른 곳에 있다는 뜻이다.
+        lights[activeIndex].position = target
     }
 
     /// 핀치를 놓았을 때 호출한다. 다음 핀치가 다시 "날아오는" 애니메이션으로 시작한다.
-    func releaseGrab() {
-        wasPinching = false
-        referenceHandScale = 0      // 다음 핀치에서 다시 캘리브레이션한다
-    }
+    func releaseGrab() { }
 
-    /// 손까지의 거리를 미터로 정한다.
+    /// 손까지의 거리를 미터로 정한다. **깊이맵만 쓴다.**
     ///
-    /// **왜 깊이맵만 쓰면 안 되는가.**
-    /// 손을 머리 뒤로 가져가면 깊이맵의 그 픽셀은 손이 아니라 **머리**를 가리킨다.
-    /// 그대로 쓰면 광원이 머리 앞에 붙어 고정된다 — 뒤로 보내려는 의도와 정반대다.
-    /// 2.5D 깊이맵의 근본 한계이지 튜닝으로 풀 수 있는 문제가 아니다.
-    ///
-    /// 그래서 **가림에 영향받지 않는 손 크기**를 주 신호로 쓴다.
-    /// 손 크기는 1/Z에 비례하므로, 핀치 시작 시 깊이맵으로 스케일을 한 번 맞춰 두면
-    /// 이후에는 크기 변화만으로 거리를 추적할 수 있다.
-    private func resolveHandDistance(inverseDepth: Float,
-                                     handScale: Float,
-                                     isGrabbing: Bool,
-                                     affine: SIMD2<Float>) -> Float {
-        let depthZ = 1 / max(affine.x * min(max(inverseDepth, 0), 1) + affine.y, 1e-3)
-
-        // 손 크기를 못 읽으면 깊이맵으로 폴백한다(손이 프레임 경계에 걸린 경우 등).
-        guard handScale > 0.01 else { return depthZ }
-
-        // 핀치 시작 순간에만 깊이맵을 믿는다. 이때는 손이 앞에 나와 있어 가려질 일이 없다.
-        if !isGrabbing || referenceHandScale <= 0 {
-            referenceHandScale = handScale
-            referenceHandZ = depthZ
-            return depthZ
-        }
-
-        // 이후에는 크기 변화만 본다. 손이 작아 보이면 멀어진 것이다 — 가려져 있어도 성립한다.
-        let scaleRatio = referenceHandScale / max(handScale, 1e-4)
-        let estimated = referenceHandZ * scaleRatio
-        return min(max(estimated, 0.15), 3.0)
+    /// 이전에는 손 크기(wrist↔middleMCP)로 거리를 외삽했다. 가림에 강하다는 장점이 있었지만,
+    /// 손을 돌리거나 주먹을 쥐면 같은 거리에서도 크기가 크게 변해 z가 틀렸다.
+    /// **보이지 않는 것을 추측하는 대신, 보이지 않으면 놓는다** —
+    /// 손이 가려지면 Vision이 손을 잃고, 그러면 핀치가 풀리고, 광원이 사라진다.
+    /// 광원이 엉뚱한 곳에 붙어 있는 것보다 잠깐 사라지는 쪽이 낫다.
+    private func resolveHandDistance(inverseDepth: Float, affine: SIMD2<Float>) -> Float {
+        1 / max(affine.x * min(max(inverseDepth, 0), 1) + affine.y, 1e-3)
     }
 
     /// 셰이더 유니폼에 현재 상태를 싣는다.

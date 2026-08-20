@@ -253,10 +253,20 @@ final class RelightEngine {
                         let result = await tracker.process(pixelBuffer: frame.pixelBuffer) { point in
                             // 핀치 지점의 깊이. 손도 프레임 안에 있으므로 별도 센서가 필요 없다.
                             pipeline.sampleInverseDepth(
-                                atNormalized: SIMD2<Float>(Float(point.x), Float(point.y))) ?? 0.5
+                                atNormalized: SIMD2<Float>(Float(point.x), Float(point.y)))
+                                ?? (depth: 0.5, reliable: false)
                         }
                         self.isHandVisible = tracker.isHandVisible
-                        if let result { self.applyPinch(result) }
+                        if let result {
+                            self.applyPinch(result)
+                        } else {
+                            // 손이 안 보이면 **위치를 예측하지 않는다.**
+                            // 마지막 자리에 광원을 남기면 그 자리가 오브젝트 앞일 때
+                            // "뒤로 보냈는데 앞에 붙는" 버그가 된다. 그냥 놓는다.
+                            var released = self.pinch
+                            released.isPinching = false
+                            self.applyPinch(released)
+                        }
                         handGate.leave()
                     }
                 }
@@ -348,18 +358,18 @@ final class RelightEngine {
             return
         }
         lightRig.isLit = true
+        // 깊이가 신뢰할 수 없으면(가림 경계) 이번 프레임은 움직이지 않는다.
+        guard pinch.depthIsReliable else { return }
         moveLight(toNormalized: SIMD2<Float>(Float(pinch.position.x), Float(pinch.position.y)),
                   handDepth: pinch.normalizedDepth,
-                  isGrabbing: true,
-                  handScale: pinch.handScale)
+                  isGrabbing: true)
     }
 
     /// 프리뷰 위 정규화 좌표로 광원을 옮긴다. 마우스와 핀치가 같은 경로를 쓴다.
     /// - Parameter normalized: 좌상단 원점 0…1. 거울상 보정은 호출부에서 끝낸 값이어야 한다.
     func moveLight(toNormalized normalized: SIMD2<Float>,
                    handDepth: Float? = nil,
-                   isGrabbing: Bool = false,
-                   handScale: Float = 0) {
+                   isGrabbing: Bool = false) {
         // 마우스로 끌면 항상 켠다. 손 모드에서만 핀치 여부가 광원의 존재를 정한다.
         if !isGrabbing { lightRig.isLit = true }
         lightRig.place(normalized: normalized,
@@ -367,8 +377,7 @@ final class RelightEngine {
                        calibration: calibration,
                        pixelSize: outputSize,
                        affine: SIMD2<Float>(SunUniforms().affineA, SunUniforms().affineB),
-                       isGrabbing: isGrabbing,
-                       handScale: handScale)
+                       isGrabbing: isGrabbing)
     }
 
     /// 리라이팅 출력 해상도를 카메라 해상도에 맞춘다.
