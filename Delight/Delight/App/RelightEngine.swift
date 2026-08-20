@@ -56,6 +56,17 @@ final class RelightEngine {
     /// 재조명 결과를 보여줄지. 끄면 원본 카메라가 나와 전후 비교가 된다.
     var showRelit = true
 
+    /// Syphon 송출. 켜면 OBS의 Syphon Client 소스에 "Delight"가 나타난다.
+    var isBroadcasting = false {
+        didSet {
+            guard isBroadcasting != oldValue else { return }
+            isBroadcasting ? syphonSink.start() : syphonSink.stop()
+        }
+    }
+    /// @ObservationIgnored — 싱크 자체는 관찰 대상이 아니다(상태는 isBroadcasting이 들고 있다).
+    /// @Observable 매크로가 프로퍼티를 computed로 바꾸므로 lazy를 쓸 수 없다.
+    @ObservationIgnored private(set) var syphonSink: SyphonSink!
+
     /// 최신 핀치 상태. HUD 피드백용. **관찰 가능한 상태는 메인 액터가 소유한다.**
     private(set) var pinch = PinchState()
     private(set) var isHandVisible = false
@@ -91,6 +102,7 @@ final class RelightEngine {
             fatalError("Metal 지원 GPU를 찾을 수 없습니다.")
         }
         self.device = device
+        self.syphonSink = SyphonSink(device: device)
 
         // 앱 시작 시 자가진단 — 모델 로딩은 카메라 권한과 무관하므로 미리 검증한다.
         // 과거 사례: 템플릿 기본값 ENABLE_APP_SANDBOX=YES 가 컨테이너 밖 Models/ 읽기를 막아
@@ -117,6 +129,11 @@ final class RelightEngine {
                 self.start()
                 // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
                 // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
+                // --broadcast: Syphon 송출까지 검증한다.
+                if ProcessInfo.processInfo.arguments.contains("--broadcast") {
+                    self.isBroadcasting = true
+                }
+
                 // 진단 루프는 **관측만 한다.**
                 // 이전에는 여기서 3초마다 lightRig를 흔들어 A/B를 쟀는데,
                 // 그 쓰기가 SwiftUI 레이아웃과 경쟁해 진단 도구 자체가 크래시를 만들었다.
@@ -127,7 +144,7 @@ final class RelightEngine {
                     try? await Task.sleep(for: .seconds(3))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 송출=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         self.lightRig.temporalBlend > 0 ? "ON " : "OFF",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
@@ -135,6 +152,7 @@ final class RelightEngine {
                         depth == nil ? "nil" : "OK",
                         relit == nil ? "nil" : "OK",
                         self.personMatte?.latestTexture() == nil ? "nil" : "OK",
+                        self.syphonSink.isActive ? "ON" : "off",
                         self.depthPipeline?.flickerMetric ?? 0,
                         self.depthPipeline?.timing.encode ?? 0,
                         self.depthPipeline?.timing.gpuWait ?? 0,
@@ -201,6 +219,7 @@ final class RelightEngine {
             // 나중에 만들면 콜백은 nil을 붙잡은 채로 남는다.
             let visionReady = OpenFlag()
             // --no-matte: 세그멘테이션 격리 실험용. 크래시 이등분에 쓴다.
+            let sink = self.syphonSink!
             let matteProvider = ProcessInfo.processInfo.arguments.contains("--no-matte")
                 ? nil : PersonMatte(device: device)
             self.personMatte = matteProvider
@@ -254,6 +273,8 @@ final class RelightEngine {
                         let elapsed = (CACurrentMediaTime() - start) * 1000
                         if let result {
                             store.publishResult(depth: result.depth, relit: result.relit)
+                            // 송출은 거울상을 적용하지 않는다 — 프리뷰 전용이다.
+                            sink.submit(result.relit, pts: frame.presentationTime)
                         }
                         gate.leave()
                         Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
@@ -298,6 +319,7 @@ final class RelightEngine {
     func stop() {
         capture?.stop()
         capture = nil
+        isBroadcasting = false
         status = .idle
     }
 

@@ -40,6 +40,21 @@ open ~/Library/Developer/Xcode/DerivedData/Delight-*/Build/Products/Debug/Deligh
 | 빌드는 되는데 실행 즉시 종료 | entitlements와 Hardened Runtime 조합 확인 |
 | "Invalid metal package" | `ENABLE_APP_SANDBOX`가 YES로 돌아갔는지 확인. 샌드박스가 컨테이너 밖 Models/ 읽기를 막는다. 시작 로그의 `[Delight] 모델 자가진단` 줄을 볼 것 |
 
+## Zoom으로 내보내기 (P6)
+
+앱 툴바의 **송출**을 켜면 Syphon 서버 "Delight"가 뜬다. 그다음 OBS에서:
+
+1. 소스 → **Syphon Client** 추가 → "Delight" 선택
+2. 하단 **가상 카메라 시작**
+3. **Zoom을 나중에 실행** — 시작 시 한 번만 장치를 스캔한다
+
+OBS 없이 송출이 살아 있는지 확인:
+
+```bash
+xcrun clang -fobjc-arc -framework Foundation -o /tmp/syphon_probe Tools/syphon_probe.m
+/tmp/syphon_probe        # "서버: Delight (Delight)" 가 나와야 한다
+```
+
 ## 데모 안전장치
 
 손 인식이 실패해도 죽지 않도록 **마우스 폴백**이 있다(툴바의 입력 선택기).
