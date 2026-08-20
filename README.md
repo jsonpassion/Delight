@@ -36,6 +36,11 @@ Apple M5, Depth Anything V2-small, 518×392, 40회 median:
 Metal 4 ML 인코더가 ANE보다 26% 빠르고, 무엇보다 **CPU 동기화가 0**입니다 —
 추론·라이팅·드로우가 하나의 커맨드 버퍼 안에서 GPU 타임라인으로 이어집니다.
 
+앱이 실제로 쓰는 시간은 이와 별개입니다. 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서
+깊이 처리 한 프레임이 **23 ms**입니다(인코딩 0.3 ms · GPU 20.6~22.8 ms).
+직전까지 17.8 ms였고, 늘어난 시간은 피부 하이라이트를 점광원에서 구 면광원으로 바꾸며 치른 값입니다 —
+30 fps 예산 33.3 ms 안입니다.
+
 ## 구조
 
 ```
@@ -59,6 +64,10 @@ xcodebuild -downloadComponent MetalToolchain   # Metal 셰이더 컴파일용 (�
 ./Tools/fetch_models.sh                        # 깊이 모델 받기 + 변환 (~49MB)
 xcodebuild -project Delight/Delight.xcodeproj -scheme Delight build
 ```
+
+화면에 있는 것은 **시작 버튼, 송출 토글, 지금 조명을 잡고 있는지 알려주는 한 줄**이 전부입니다.
+파라미터 슬라이더는 없습니다 — 튜닝이 끝난 값은 상수입니다.
+손 추적이 안 되는 환경에서는 **마우스 드래그가 토글 없이 항상 동작합니다.**
 
 벤치마크만 돌려보려면:
 
@@ -87,6 +96,8 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
 - [ ] **P7** CMIO Camera Extension — **부분 완료.** 확장 타깃 빌드 · 서명 · 앱 번들 임베드까지 됩니다.
   설치는 조건부입니다: Developer ID 서명 + 공증, 또는 SIP를 끄고 개발자 모드.
   그 조건이 없는 환경에서는 P6(Syphon → OBS) 경로가 그대로 동작합니다
+- [x] **다듬기** 피부 스펙큘러를 구 면광원 + 이중 로브로 · 가려진 관절 판정 · UI 제거(2955 → 2531줄)
+  · 캡처 경로에서 MainActor 제거
 
 ## 프라이버시
 

@@ -147,8 +147,10 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#occlusion-bug">깊이맵이 거짓말할 때</a></li>
     <li><a href="#stabilize">안정화: 떨림을 8배 줄이기</a></li>
     <li><a href="#prediction">추측을 없앴다</a></li>
+    <li><a href="#specular">하이라이트가 점이었던 이유</a></li>
+    <li><a href="#simplify">노브를 전부 없앴다</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
-    <li><a href="#crash-triage">크래시 한 증상, 원인 셋</a></li>
+    <li><a href="#crash-triage">크래시 한 증상, 원인 넷</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
     <li><a href="#budget">성능 예산</a></li>
@@ -156,6 +158,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#broadcast">Zoom까지 가는 길</a></li>
     <li><a href="#extension">OBS 없이 Zoom으로</a></li>
     <li><a href="#repro">재현 절차</a></li>
+    <li><a href="#lessons">회고: 반복된 실수와 반복된 성공</a></li>
   </ol>
 </nav>
 
@@ -757,7 +760,7 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
 <!-- ─────────────────────────────────────── -->
 <section id="prediction">
   <h2><span class="num">06-5</span>추측을 없앴다</h2>
-  <p class="dek">광원이 오브젝트 앞에 붙어 고정되던 버그. 원인은 알고리즘이 아니라 <em>보이지 않는 것을 추측한 코드</em>였고, 그런 코드가 두 군데 있었다.</p>
+  <p class="dek">광원이 오브젝트 앞에 붙어 고정되던 버그. 원인은 알고리즘이 아니라 <em>보이지 않는 것을 추측한 코드</em>였고, 그런 코드가 두 군데 있었다. 셋째는 나중에 드러났다.</p>
 
   <p>증상은 <a href="#occlusion-bug">§06-3</a>과 같은 문장이다. 핀치한 손을 오브젝트 뒤로 옮기면
     광원이 오브젝트 <strong>앞</strong>에 붙어 고정된다 — 뒤로 보내려는 의도와 정확히 반대다.
@@ -796,6 +799,26 @@ let spread = neighborhood[neighborhood.count - 1] - neighborhood[0]
 <span class="cmt">// 광원 갱신 쪽</span>
 <span class="hl">guard pinch.depthIsReliable else { return }</span>   <span class="cmt">// 틀린 z로 옮기느니 그 자리에 둔다</span></code></pre>
 
+  <h3>그래도 남아 있었다 — 가려진 관절도 Vision은 계속 준다</h3>
+  <p>위 셋을 고친 뒤에도 같은 증상이 드물게 남았다. 남은 경로는 이것이다.
+    핀치하는 엄지·검지 끝이 <strong>손등이나 다른 손가락에 가려져도 Vision은 관절 좌표를 계속 추정해 준다.</strong>
+    좌표가 오니 코드는 손이 보인다고 믿고, 그 화면 좌표에서 깊이맵을 읽으면 읽히는 것은
+    손끝이 아니라 <strong>손끝을 가린 쪽</strong>이다. 결과는 또 광원이 오브젝트 앞에 뜨는 것이다.</p>
+  <p>이웃 퍼짐(spread)으로는 못 잡는다. 가린 쪽 표면이 매끄러우면 5×5 창 안의 깊이가 고르게 나오기 때문이다.
+    다른 신호가 필요했고, 이번엔 <strong>손은 한 덩어리라는 사실</strong>을 썼다 —
+    손목 · indexMCP · middleMCP · ringMCP는 서로 가리기 어려운 관절들이다.
+    이 넷의 깊이 중앙값이 손 전체가 어디쯤 있는지를 말해 준다.
+    손끝은 손바닥보다 카메라에 가깝거나 비슷하다. <strong>유독 멀면 가려진 것이다.</strong></p>
+
+  <pre><code><span class="cmt">// 손바닥 쪽 관절들 — 서로 가리기 어려워 기준으로 삼을 만하다</span>
+let names: [HumanHandPoseObservation.JointName] = [.wrist, .indexMCP, .middleMCP, .ringMCP]
+
+<span class="cmt">// 역깊이라 값이 클수록 가깝다. 손끝이 손바닥보다 크게 멀면(작으면) 가림이다.</span>
+<span class="hl">return pinchDepth &gt; median - 0.10</span>   <span class="cmt">// false면 depthIsReliable = false → 광원을 움직이지 않는다</span></code></pre>
+
+  <p>판단 근거가 없으면(신뢰도 0.4를 넘는 앵커 관절이 2개 미만) 통과시킨다.
+    막을 수 없는 경우까지 막으려 들면 이번엔 정상 동작이 끊긴다.</p>
+
   <h3>스냅 애니메이션도 지웠다</h3>
   <p>잡는 순간 광원이 손끝으로 날아가는 연출이 있었다. 보기 좋으라고 넣은 것인데,
     <strong>그 사이 프레임에서는 광원이 손과 다른 곳에 있다</strong>는 뜻이다.
@@ -816,6 +839,118 @@ let spread = neighborhood[neighborhood.count - 1] - neighborhood[0]
     <p>손이 프레임을 벗어나면 <strong>즉시 핀치=놓음</strong>, z는 그 자리에 고정된다.
       깊이 처리 <strong>17.8 ms 유지</strong>, 크래시 없음.</p>
   </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="specular">
+  <h2><span class="num">06-6</span>하이라이트가 점이었던 이유</h2>
+  <p class="dek">피부에 뜬 반사광이 흰 dot으로 보였다. 세기도 거칠기도 범인이 아니었다 — 광원 반경이 스펙큘러 계산에 <em>아예 들어가 있지 않았다</em>.</p>
+
+  <p>광원에는 <code>radius</code>가 있었다. 그런데 그 값은 <strong>그림자 페넘브라를 부드럽게 하는 데만</strong> 쓰였고,
+    스펙큘러는 광원을 <strong>수학적 점</strong>으로 계산하고 있었다.
+    점광원의 하이라이트는 점이다 — 코드가 시킨 그대로 나온 결과였다.
+    실제 촬영에서 얼굴에 뜨는 하이라이트는 소프트박스의 크기와 모양을 그대로 반사한다.
+    "조명이 어색하다"의 원인이 조명 모델이 아니라 <strong>빠진 입력</strong>이었던 셈이다.</p>
+
+  <h3>① 구를 대표점 하나로 — Karis representative point</h3>
+  <p>면광원을 제대로 적분하면 실시간이 아니다. 대신 <strong>반사 벡터에서 광원 구에 가장 가까운 점</strong>을
+    골라 그 점을 광원으로 친다. 하이라이트가 구의 실루엣을 따라 번지는 근사다.</p>
+  <pre><code><span class="cmt">// ✗ 고치기 전 — 광원 중심 하나로 하프벡터를 만든다. radius는 쓰이지 않는다</span>
+float3 H = normalize(L + viewDirection);
+
+<span class="cmt">// ✓ 고친 후 — 반사 벡터에 가장 가까운 구 표면 점을 광원으로 삼는다</span>
+float3 reflectDir  = reflect(-viewDirection, normal);
+float3 centerToRay = dot(toLight, reflectDir) * reflectDir - toLight;
+<span class="hl">float3 closestPoint = toLight + centerToRay * saturate(light.radius / max(length(centerToRay), 1e-4));</span>
+float3 specL = normalize(closestPoint);</code></pre>
+
+  <h3>② 넓힌 만큼 어두워야 한다</h3>
+  <p>대표점만으로는 부족하다. 광원이 크고 가까울수록 로브 자체가 넓어져야 한다.
+    그래서 거칠기를 광원 크기만큼 키우는데, <strong>여기에 에너지 항을 같이 넣지 않으면 반경을 키워도
+    하이라이트 크기가 그대로다</strong>. 로브를 넓히면서 정점 밝기를 그대로 두면
+    포화된 흰 픽셀이 남아 여전히 점으로 보이기 때문이다.</p>
+  <pre><code>float sphereWiden = saturate(light.radius / (2.0 * max(distance, 1e-3)));
+float roughness   = saturate(baseRoughness + sphereWiden);
+<span class="hl">float energy      = 1.0 / (1.0 + sphereWiden * 4.0);</span>   <span class="cmt">// 넓어진 만큼 어두워져야 한다</span></code></pre>
+
+  <h3>③ 이중 로브 — 피부는 층이 둘이다</h3>
+  <p>피부는 얇은 기름막(좁고 밝음)과 그 아래 층(넓고 흐림)이 겹쳐 반사한다.
+    단일 GGX 로브로 그리면 <strong>유리처럼</strong> 보인다 — 반사가 한 겹이라 표면이 딱딱해 보인다.</p>
+  <pre><code>float D = <span class="hl">mix(ggxDistribution(NdotH, roughness * 1.6),
+          ggxDistribution(NdotH, roughness * 0.7), 0.35);</span></code></pre>
+  <p>여기에 기본 반경을 <strong>0.06 → 0.18 m</strong>로 올렸다. 스팟에서 소프트박스로 바꾼 것이다.
+    ①②가 들어오기 전에는 반경을 올려도 그림자만 부드러워졌지 하이라이트는 변하지 않았다.</p>
+
+  <h3>④ 완벽한 원을 흩는다 — 노멀 디테일</h3>
+  <p>남은 문제가 하나 더 있었다. 518×392 깊이맵은 얼굴을 <strong>매끄러운 타원</strong>으로 만든다.
+    그런 표면 위의 하이라이트는 <strong>수학적으로 완벽한 원</strong>이 되고, 사람은 그걸 즉시 CG로 읽는다.
+    실제 피부는 미세 요철이 하이라이트를 흩는다.</p>
+  <p>깊이맵에 없는 그 요철은 <strong>카메라 영상에 있다.</strong> 피부는 대체로 램버시안이므로
+    루마의 고주파는 지오메트리 고주파에 가깝다. 그래서 루마 고주파의 <strong>기울기</strong>를 노멀에 실었다 —
+    값이 아니라 기울기여야 노멀이 <em>기울어진다</em>.</p>
+  <pre><code>float2 slope = float2(lumaRight - lumaCenter, lumaUp - lumaCenter);
+<span class="hl">n.xy += (slope * 18.0 + highPass) * u.detailStrength;</span>
+n = normalize(n);</code></pre>
+
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">function 'air.dfdx.f32' is not allowed within a kernel function</div>
+      <h4>화면공간 미분은 컴퓨트 커널에 없다</h4>
+      <p>기울기를 <code>dfdx</code>/<code>dfdy</code>로 잡으려 했다. 프래그먼트 셰이더에서는 공짜인 함수인데,
+        이 값은 쿼드 단위 래스터화에서 나오는 것이라 <strong>컴퓨트 커널에는 존재하지 않는다.</strong>
+        같은 언어, 같은 파일, 다른 실행 모델이다.</p>
+      <p class="fix">→ 이웃 텍셀(<code>uv + texel.x</code>, <code>uv + texel.y</code>)을 직접 떠서 차분한다.
+        텍스처 샘플 2개가 늘어난다.</p>
+    </div>
+  </div>
+
+  <div class="call good">
+    <span class="lbl">치른 값 — 정직하게</span>
+    <p>깊이 처리가 <strong>17.8 ms → 23 ms</strong>가 됐다
+      (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps.
+      구간: enc 0.3 · gpu 20.6~22.8 · aff 0.0 · flk 4.0~6.4).
+      늘어난 5 ms의 내역은 구 면광원 계산, 이중 로브(GGX 2회), 노멀 디테일의 텍스처 샘플 2개다.</p>
+    <p>30 fps 예산 33.3 ms 안이므로 지불했다. 60 fps를 목표로 되돌린다면
+      가장 먼저 되돌아볼 항목도 이것이다 — <a href="#budget">§09</a>.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="simplify">
+  <h2><span class="num">06-7</span>노브를 전부 없앴다</h2>
+  <p class="dek">개발 중 필요했던 슬라이더는 쓰는 사람에게 선택지가 아니라 부담이다. 코드 2955 → 2531줄.</p>
+
+  <p>이 앱이 하는 일은 하나다. <strong>손으로 조명을 잡아 옮긴다.</strong>
+    그런데 화면에는 파라미터 슬라이더 12개짜리 컨트롤 패널, 설정 창, 깊이 좌우분할 보기,
+    반전 토글, 입력모드(손/마우스) 토글이 있었다. 전부 <em>내가</em> 개발 중에 필요했던 것들이다.
+    처음 켠 사람에게 <code>thickness</code> 슬라이더는 선택지가 아니다 —
+    "이걸 만져야 제대로 보이나?"라는 <strong>부담</strong>이다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>없앤 것</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>ControlPanel (슬라이더 12개)</td><td class="note">튜닝이 끝난 값은 상수여야 한다. 노브가 없으면 잘못 맞춰진 노브도 없다</td></tr>
+        <tr><td>SettingsView</td><td class="note">남은 설정이 없다</td></tr>
+        <tr><td>깊이 좌우분할 보기 · 반전 토글</td><td class="note">개발자용 진단. 셰이더의 <code>composite_split</code> · <code>blit_source</code> · <code>visualize_depth</code> 커널까지 같이 지웠다</td></tr>
+        <tr><td>입력모드(손/마우스) 토글</td><td class="note">고를 이유가 없다 — 마우스 드래그는 <strong>토글 없이 항상 동작한다</strong></td></tr>
+        <tr class="lead"><td>남은 UI</td><td class="note">시작 버튼 · 송출 토글 · 지금 조명을 잡고 있는지 알려주는 한 줄</td></tr>
+      </tbody>
+      <caption>미사용 <code>Metal4MLDepthProvider</code>와 깊이 시각화 경로도 함께 제거했다. 2955 → 2531줄.</caption>
+    </table>
+  </div>
+
+  <div class="call">
+    <span class="lbl">토글을 지우면서 지키기로 한 것</span>
+    <p>입력모드 토글은 지웠지만 <strong>마우스 폴백 자체는 남긴다.</strong>
+      손 추적은 조명·카메라·자세에 따라 실패할 수 있고, 그때 데모가 멈추면 안 된다.
+      토글을 지운다는 것은 <em>기능을 지운다</em>가 아니라
+      <strong>사용자에게 고르게 하지 않는다</strong>는 뜻이다. 둘은 다르다.</p>
+  </div>
+
+  <p>같은 방향의 결정이 앞에도 있었다 — 광원 수명(<a href="#occlusion-bug">§06-3</a>),
+    스냅 애니메이션 제거(<a href="#prediction">§06-5</a>).
+    셋 다 <strong>상태와 선택지를 줄이면 틀릴 수 있는 조합도 줄어든다</strong>는 같은 이야기다.</p>
 </section>
 
 <!-- ─────────────────────────────────────── -->
@@ -939,8 +1074,8 @@ float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">//
 
 <!-- ─────────────────────────────────────── -->
 <section id="crash-triage">
-  <h2><span class="num">07-1</span>크래시 한 증상, 원인 셋</h2>
-  <p class="dek">"앱이 자꾸 죽는다"는 하나의 버그가 아니었다. 리포트 5건을 파싱하니 원인이 셋으로 갈라졌다.</p>
+  <h2><span class="num">07-1</span>크래시 한 증상, 원인 넷</h2>
+  <p class="dek">"앱이 자꾸 죽는다"는 하나의 버그가 아니었다. 리포트 5건을 파싱하니 원인이 셋으로 갈라졌고, 넷째는 그 뒤 리팩토링에서 드러났다.</p>
 
   <p>2026-08-19 17:27부터 08-20 10:31 사이에 크래시 리포트가 5건 쌓였다. 증상은 하나로 보인다 — 앱이 죽는다.
     그런데 스택 최상단은 매번 <strong>남의 코드</strong>였다. AGX 드라이버, Espresso(ANE) 런타임, SwiftUICore.
@@ -1030,6 +1165,40 @@ float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">//
       </tbody>
       <caption>시작 사이클 5회 연속. 깊이 처리 시간의 상단은 <a href="#stabilize">§06-4</a>에 적어둔 미해결 변동 구간과 같은 범위다.</caption>
     </table>
+  </div>
+
+  <h3>④ 같은 스택이 다시 났다 — 이번엔 뿌리를 뽑았다</h3>
+  <p>UI를 걷어내는 리팩토링(<a href="#simplify">§06-7</a>) 직후, <strong>③과 똑같은 스택</strong>이 다시 떴다.</p>
+
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">RefCounts::incrementSlow → UnaryLayoutComputer.updateValue → AttributeGraph</div>
+      <h4>캡처 콜백이 매 프레임 MainActor Task를 두 개씩 만들고 있었다</h4>
+      <p>③에서는 <code>--autostart</code> 진단 루프가 3초마다 상태를 흔든 것이 범인이었고, 그건 맞았다.
+        하지만 그건 <strong>가장 눈에 띄는 원인</strong>이었을 뿐 유일한 원인이 아니었다.
+        캡처 콜백이 프레임마다 <strong>통계 갱신</strong>과 <strong>조명 스냅샷</strong>을 위해
+        MainActor Task를 하나씩, 즉 두 개씩 띄우고 있었다.
+        30 fps면 초당 60개가 SwiftUI 트랜잭션과 같은 액터에서 경쟁한다.
+        3초에 한 번이 문제였다면 초당 60번은 같은 문제의 20배다.</p>
+      <p class="fix">→ 두 경로 모두 액터를 건너지 않게 바꿨다.
+        조명은 <code>LightingStore</code>(NSLock) — <strong>사용자가 움직일 때만</strong> 밀어넣고
+        캡처 스레드는 읽기만 한다. <code>FrameStats</code>는 <code>nonisolated</code> 클래스 —
+        <strong>초당 30번 바뀌는 값은 관찰 대상이 아니다.</strong>
+        <code>@Observable</code>로 두면 SwiftUI가 그 횟수만큼 레이아웃을 다시 한다.</p>
+      <p class="fix">→ 결과: <strong>캡처 경로에서 MainActor가 완전히 사라졌다.</strong>
+        24초 실행, 크래시 없음, 매트 OK.</p>
+    </div>
+  </div>
+
+  <div class="call">
+    <span class="lbl">세 번째로 같은 스택을 본 뒤에야</span>
+    <p><a href="#bugs">§07</a>의 <code>MTKView.draw</code> 건, ③의 진단 루프, 그리고 이번 건 —
+      스택 최상단은 매번 SwiftUI였고 수정은 매번 달랐다.
+      공통점은 하나다. <strong>렌더 경로의 어느 지점이 MainActor를 건드리고 있었다.</strong></p>
+    <p>개별 호출을 하나씩 옮기는 대신 규칙으로 바꿨다 —
+      <strong>프레임당 실행되는 코드는 메인 액터에 아무것도 올리지 않는다.</strong>
+      값이 필요하면 락으로 보호된 저장소를 읽는다. 이건 <a href="#occlusion-bug">§06-3</a>의
+      "상태를 고치는 것보다 상태를 없애는 쪽이 견고하다"의 동시성 판이다.</p>
   </div>
 </section>
 
@@ -1166,12 +1335,17 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   </div>
 
   <div class="call good">
-    <span class="lbl">실측 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps)</span>
-    <pre style="margin:.5rem 0 0"><code>깊이  17.85 / 17.80 / 17.99 / 17.86 / 17.76 ms
-구간  enc 0.1 · gpu 15.8~16.6 · aff 0.0~1.0 · flk 1.0</code></pre>
+    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps)</span>
+    <pre style="margin:.5rem 0 0"><code>깊이  23 ms   <span class="cmt">← 실사용 경로 = enc + gpu</span>
+구간  enc 0.3 · gpu 20.6~22.8 · aff 0.0 · flk 4.0~6.4</code></pre>
     <p style="margin-top:.6rem">위 예산표는 60 fps 목표의 배분이고, 이것은 현재 앱이 실제로 쓰는 시간이다.
-      30 fps 예산 33.3 ms의 절반 수준이며, 그 전에는 22~32 ms를 오갔다.
-      무엇을 어떻게 재서 여기까지 왔는지는 <a href="#profiling">§09-1</a>에 있다.</p>
+      <code>flk</code>(플리커 측정)는 <code>--autostart</code> 진단에서만 켜지므로
+      실사용 경로는 <strong>gpu + enc ≈ 23 ms</strong>다. 30 fps 예산 33.3 ms 안이다.</p>
+    <p>직전 값은 <strong>17.8 ms</strong>였다(<a href="#profiling">§09-1</a>).
+      늘어난 시간은 낭비가 아니라 <strong>맞바꾼 값</strong>이다 —
+      구 면광원 · 이중 로브 · 노멀 디테일 텍스처 샘플 2개(<a href="#specular">§06-6</a>).
+      하이라이트가 점에서 면적을 가진 빛이 됐고, 그 값을 GPU가 냈다.
+      60 fps로 되돌려야 한다면 가장 먼저 재검토할 항목이기도 하다.</p>
   </div>
 
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
@@ -1276,6 +1450,10 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   <p>이유는 둘이다. 출력이 카메라와 1:1이 되면서 <strong>다운샘플 샘플링이 사라졌고</strong>
     (텍스처 페치가 1:1이다), 위에서 지운 <strong>CPU 후처리 2.5 ms</strong>가 빠졌다.
     픽셀이 31% 늘어난 비용보다 이 둘이 컸다.</p>
+
+  <p>이 17.8 ms는 <strong>이 시점의 값</strong>이다. 이후 스펙큘러를 면광원으로 바꾸면서
+    23 ms가 됐다(<a href="#specular">§06-6</a> · <a href="#budget">§09</a>) —
+    구간을 쪼개는 계측이 남아 있었기 때문에 그 5 ms가 <em>어디로</em> 갔는지는 바로 말할 수 있었다.</p>
 
   <div class="call">
     <span class="lbl">남는 것</span>
@@ -1556,6 +1734,133 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     <p>M5 · 518×392 · 40회 median 기준으로 <strong>추론 15.4 ms, 전체 체인 15.6 ms</strong>다.
       여기서 크게 벗어나면 회귀를 의심한다. 교차검증은 항상 <code>r = 1.00000</code>이어야 한다 —
       1이 아니면 전처리나 인덱싱이 깨진 것이다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="lessons">
+  <h2><span class="num">11</span>회고: 반복된 실수와 반복된 성공</h2>
+  <p class="dek">위 문서는 시간순이다. 여기서는 같은 실수와 같은 판단이 몇 번씩 되풀이된 축으로 다시 묶는다. 전부 앞 섹션에 사례가 있다.</p>
+
+  <h3>1. 추측하지 말고 측정하라 — 그럴듯한 설명은 증거가 아니다</h3>
+  <p>이 프로젝트에서 가장 비싼 실수는 버그가 아니라 <strong>검증하지 않은 가설</strong>이었다.</p>
+  <ul>
+    <li><strong>변동폭 22~32 ms</strong>(<a href="#profiling">§09-1</a>) — 주기적으로 도는 세그멘테이션(15 Hz) 탓이라고 추정했다.
+      주기가 있는 부하와 주기가 있어 보이는 변동, 설명이 딱 맞아떨어졌다.
+      구간을 넷으로 쪼개니 변동은 전부 GPU 대기에 있었고,
+      <code>--no-matte</code>로 이등분하니 세그멘테이션 ON/OFF의 변동폭이 1.9와 1.8로 같았다.
+      진짜 원인은 <strong>콜드 스타트</strong>였다 — 고칠 코드가 아니라 고칠 측정 방법이었다.</li>
+    <li><strong>양자화</strong>(<a href="#model">§07-2</a>) — INT8이면 빨라질 것이라 기대했다.
+      실측은 Metal 4 경로에서 <strong>실행 불가</strong>(GPU 타임아웃), Core ML ANE에서 20.31 ms로 F16과 동일.
+      얻은 것은 파일 크기 절반뿐이라 기각했다.</li>
+    <li><strong><code>.private</code> → <code>.shared</code></strong>(<a href="#pinch">§06-1</a>) — 성능 저하를 각오한 변경이었는데
+      통합 메모리라 15.1~15.6 ms로 <strong>차이가 없었다</strong>. 겁먹고 안 했으면 핀치 z를 못 얻었다.</li>
+    <li><strong>해상도를 31% 올렸는데 빨라졌다</strong>(<a href="#quality">§06-2</a> · <a href="#profiling">§09-1</a>) —
+      1:1 페치로 리샘플이 사라지고 CPU 후처리 2.5 ms가 빠진 효과가 픽셀 증가보다 컸다.</li>
+  </ul>
+  <p>공통 교훈은 순서에 있다. <strong>가설을 세우기 전에 계측을 쪼갠다.</strong>
+    전체 시간 하나만 보고 있으면 그럴듯한 가설을 반증할 방법이 없고,
+    엉뚱한 곳을 최적화하는 비용은 아무것도 안 하는 것보다 크다 — 코드는 복잡해지고 원인은 그대로 남는다.</p>
+
+  <h3>2. 보이지 않는 것을 추측하면 버그가 된다 — 세 번 같은 실수</h3>
+  <p>증상은 세 번 다 <strong>같은 문장</strong>이었다. "핀치한 손을 오브젝트 뒤로 옮기면 광원이 오브젝트 앞에 붙어 고정된다."
+    원인은 세 번 다 <strong>없는 정보를 만들어낸 코드</strong>였다.</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>추측한 것</th><th>왜 무너졌나</th><th>어디</th></tr></thead>
+      <tbody>
+        <tr><td>손 크기로 z를 외삽</td><td class="note">손 크기는 거리만의 함수가 아니다 — 돌리거나 쥐면 같은 거리에서도 변한다</td><td class="note"><a href="#occlusion-bug">§06-3</a> 도입 → <a href="#prediction">§06-5</a> 제거</td></tr>
+        <tr><td>손을 놓친 프레임에서 마지막 핀치 유지</td><td class="note">깜빡임을 견디려던 코드가 광원을 마지막 자리에 남겼다</td><td class="note"><a href="#prediction">§06-5</a></td></tr>
+        <tr class="lead"><td>가려진 관절의 좌표를 그대로 신뢰</td><td class="note">Vision은 가려져도 관절을 계속 추정해 준다 — 깊이맵은 가린 쪽을 읽는다</td><td class="note"><a href="#prediction">§06-5</a></td></tr>
+      </tbody>
+      <caption>세 번째는 앞의 둘을 고친 뒤에도 남아 있던 잔여였다. 같은 실수를 세 번 하고 나서야 형태가 보였다.</caption>
+    </table>
+  </div>
+  <p>지금 규칙은 하나다. <strong>모르면 모른다고 하고 움직이지 않는다.</strong>
+    이웃 깊이의 퍼짐이 크면 가림 경계로 보고 광원을 두고,
+    손바닥 관절들과 핀치 깊이가 어긋나면 가림으로 보고 광원을 둔다.
+    추측은 항상 "대부분의 경우 맞다"로 정당화되지만, 사용자가 기억하는 것은 틀린 순간이다.</p>
+
+  <h3>3. 상태를 고치는 것보다 상태를 없애는 쪽이 견고하다</h3>
+  <p>추정을 개선하는 방향은 "얼마나 좋아졌나"가 항상 확률적이다.
+    상태를 제거하는 방향은 증상이 <em>발생할 수 없다</em>는 것을 코드에서 읽을 수 있다.
+    같은 판단을 네 번 했다.</p>
+  <ul>
+    <li><strong>광원 수명</strong>(<a href="#occlusion-bug">§06-3</a>) — 핀치를 놓으면 광원이 사라진다.
+      "잘못된 자리에 남은 광원"이라는 상태 자체가 없어진다.</li>
+    <li><strong>스냅 애니메이션 제거</strong>(<a href="#prediction">§06-5</a>) — 보간하는 동안 광원이 손과 다른 곳에 있는 프레임이 사라진다.</li>
+    <li><strong>UI 노브 제거</strong>(<a href="#simplify">§06-7</a>) — 노브가 없으면 잘못 맞춰진 노브도 없다.</li>
+    <li><strong>캡처 경로에서 MainActor 제거</strong>(<a href="#crash-triage">§07-1</a>) —
+      액터 경쟁을 조율하는 대신 경쟁 자체를 없앴다.</li>
+  </ul>
+
+  <h3>4. 검증 도구도 검증해야 한다</h3>
+  <p>이 프로젝트에서 <strong>도구가 거짓말한 횟수</strong>가 파이프라인이 틀린 횟수만큼 많았다.</p>
+  <ul>
+    <li><strong>교차검증 코드가 틀렸다</strong>(<a href="#bugs">§07</a>) — Core ML 출력 <code>Grayscale16Half</code>를
+      <code>Float</code>로 읽어 <code>r = −0.28</code>이 나왔다. 파이프라인은 이미 맞은 상태였다.</li>
+    <li><strong>진단 루프가 크래시를 만들었다</strong>(<a href="#crash-triage">§07-1</a>) —
+      관측하려고 켠 것이 관측 대상을 바꿨다. 관측 코드는 관측만 해야 한다.</li>
+    <li><strong>알림 이름은 상수명이 아니라 문자열</strong>(<a href="#broadcast">§09-2</a>) —
+      상수의 <em>이름</em>을 문자열로 쓰면 알림이 영원히 오지 않는다. 조용히 실패하는 종류다.</li>
+    <li><strong>안전장치를 일부러 깨봤다</strong>(<a href="#verify">§08</a>) —
+      <code>static_assert</code> 값을 틀리게 바꿔 빌드가 실제로 깨지는지 확인하고 되돌렸다.
+      검증하지 않은 안전장치는 안전장치가 아니다.</li>
+  </ul>
+
+  <h3>5. 경계를 넘으면 자동으로 주던 것이 사라진다</h3>
+  <p>같은 언어, 같은 리포, 같은 기계인데 <strong>실행 환경이 다르면 있던 것이 없다.</strong>
+    세 번 다 컴파일 에러로 먼저 나타났고, 세 번 다 "왜 이게 없지"에서 시작했다.</p>
+  <ul>
+    <li><strong>프레임워크 → 소스 포함</strong>(<a href="#broadcast">§09-2</a>) —
+      prefix header는 프레임워크 <em>타깃의 빌드 설정</em>이지 소스의 일부가 아니고,
+      umbrella header가 해주던 import도 따라오지 않는다.</li>
+    <li><strong>앱 → 시스템 확장</strong>(<a href="#extension">§09-3</a>) —
+      <code>NSAttributedString.Key.font</code>는 AppKit이 얹은 확장이고,
+      <code>kIOAudioDeviceTransportTypeVirtual</code>은 CoreAudio가 준다. 확장은 둘 다 링크하지 않는다.</li>
+    <li><strong>프래그먼트 → 컴퓨트</strong>(<a href="#specular">§06-6</a>) —
+      <code>dfdx</code>/<code>dfdy</code>는 쿼드 래스터화에서 나오는 값이라 커널에 없다.</li>
+  </ul>
+
+  <h3>6. 컴파일러가 안 잡아주는 계약이 가장 오래 걸린다</h3>
+  <p>타입 시스템 밖에 있는 약속들은 <strong>런타임에 조용히 틀린다.</strong>
+    그래서 각각에 장치를 하나씩 붙였다.</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>계약</th><th>어긋나면</th><th>붙인 장치</th></tr></thead>
+      <tbody>
+        <tr><td>액터 격리 가정(<code>assumeIsolated</code>)</td><td class="note">참조카운트 경쟁 → 해제된 객체(<a href="#bugs">§07</a>)</td><td class="note">렌더 경로를 완전한 <code>nonisolated</code>로. 프레임당 코드는 메인 액터에 아무것도 올리지 않는다</td></tr>
+        <tr><td>Swift ↔ Metal 구조체 레이아웃</td><td class="note">셰이더에 조용히 쓰레기 값(<a href="#verify">§08</a>)</td><td class="note">헤더에 <code>static_assert(sizeof(...) == N)</code></td></tr>
+        <tr><td>단일 커맨드 버퍼의 인코딩 순서</td><td class="note">RAW 해저드가 <strong>GPU 드라이버 스택</strong>의 크래시로 나타난다(<a href="#bugs">§07</a> · <a href="#crash-triage">§07-1</a>)</td><td class="note">순서를 바로잡고 "반드시 안정화 뒤에 인코딩"을 주석에 못 박음</td></tr>
+      </tbody>
+      <caption>공통점: 크래시 스택 최상단이 매번 남의 코드였다(AGX 드라이버 · Espresso · SwiftUICore). 스택을 끝까지 읽는 것 말고는 방법이 없었다.</caption>
+    </table>
+  </div>
+
+  <h3>7. 잘한 판단들도 기록해 둔다</h3>
+  <p>회고가 실패 목록만 되면 다음에 무엇을 <em>또 해야 하는지</em>를 잃는다.</p>
+  <ul>
+    <li><strong>추론을 GPU 타임라인에 올린 것</strong>(<a href="#decisions">§03</a>) —
+      추론 출력이 GPU 메모리를 떠나지 않는다. 이 구조 하나가 CPU 왕복을 전부 없앴다.</li>
+    <li><strong>깊이는 저해상도, 조명은 고해상도</strong>(<a href="#quality">§06-2</a>) —
+      깊이맵은 저주파라 518×392로 충분하다. 이 분리가 "흐릿함"을 없애면서 예산도 지켰다.</li>
+    <li><strong>Syphon을 먼저 뚫은 것</strong>(<a href="#broadcast">§09-2</a>) —
+      Zoom 진입은 그래픽 문제가 아니라 행정 문제였고, <strong>행정 비용이 0인 경로</strong>를 먼저 열었다.
+      CMIO 확장이 SIP·서명 조건에 막힌 지금(<a href="#extension">§09-3</a>)도 송출은 동작한다.</li>
+    <li><strong>눈으로 볼 수 있는 산출물을 만든 것</strong>(<a href="#quality">§06-2</a> · <a href="#verify">§08</a>) —
+      PNG 덤프 진단 경로가 흰 후광이 실루엣을 정확히 따라간다는 것을 한눈에 보여줬다.
+      실시간 화면만 봤다면 못 잡았다.</li>
+    <li><strong>이등분</strong>(<a href="#crash-triage">§07-1</a> · <a href="#profiling">§09-1</a>) —
+      <code>--no-matte</code> 하나로 크래시 방아쇠를 확정했고, 같은 플래그로 성능 가설을 기각했다.
+      쓸모를 다한 뒤에도 <strong>이등분 도구로 남겨뒀다</strong>.</li>
+  </ul>
+
+  <div class="call cool">
+    <span class="lbl">한 문장으로</span>
+    <p>이 프로젝트가 반복해서 가르친 것은 같은 문장의 두 얼굴이다 —
+      <strong>모르는 것을 아는 척하면(추측한 z, 검증 안 한 가설, 검증 안 한 도구) 반드시 되돌아온다.</strong>
+      그리고 그 반대편에 <strong>모른다는 것을 코드가 표현할 수 있게 만드는 일</strong>
+      (신뢰 못 할 깊이는 안 쓴다, 놓으면 사라진다, 노브는 없앤다)이 있다.</p>
   </div>
 </section>
 
