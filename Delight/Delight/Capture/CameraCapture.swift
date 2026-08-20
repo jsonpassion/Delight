@@ -74,6 +74,18 @@ final class CameraCapture: NSObject {
         session.beginConfiguration()
         session.sessionPreset = .high
 
+        // 포맷을 명시적으로 고른다. preset에 맡기면 시스템이 30fps 저해상도를 줄 수 있다.
+        // 우선순위: 높은 프레임레이트 → 큰 해상도.
+        // 60fps 소스는 손 인터랙션 체감에 직결된다(iPhone Continuity는 1920×1440@60을 준다).
+        if let best = Self.preferredFormat(for: camera),
+           (try? camera.lockForConfiguration()) != nil {
+            camera.activeFormat = best.format
+            let duration = CMTime(value: 1, timescale: CMTimeScale(best.frameRate))
+            camera.activeVideoMinFrameDuration = duration
+            camera.activeVideoMaxFrameDuration = duration
+            camera.unlockForConfiguration()
+        }
+
         let input = try AVCaptureDeviceInput(device: camera)
         guard session.canAddInput(input) else { throw CaptureError.cannotAddInput }
         session.addInput(input)
@@ -132,6 +144,36 @@ final class CameraCapture: NSObject {
 
     static func defaultCamera() -> AVCaptureDevice? {
         availableCameras().first
+    }
+
+    /// 프레임레이트를 해상도보다 우선한다. 조명이 손을 늦게 따라오는 것이
+    /// 화소가 조금 부족한 것보다 훨씬 크게 느껴진다.
+    static func preferredFormat(for device: AVCaptureDevice)
+        -> (format: AVCaptureDevice.Format, frameRate: Double)? {
+        var best: (AVCaptureDevice.Format, Double, Int)?
+        for format in device.formats {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let pixels = Int(dimensions.width) * Int(dimensions.height)
+            guard let maxRate = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max()
+            else { continue }
+            // 240fps 같은 극단 포맷은 해상도가 너무 낮다. 60까지만 본다.
+            let rate = min(maxRate, 60)
+            guard pixels >= 640 * 480 else { continue }
+            if let current = best {
+                if rate > current.1 || (rate == current.1 && pixels > current.2) {
+                    best = (format, rate, pixels)
+                }
+            } else {
+                best = (format, rate, pixels)
+            }
+        }
+        guard let best else { return nil }
+        return (best.0, best.1)
+    }
+
+    /// 현재 활성 포맷의 해상도. 파이프라인 출력 해상도를 여기 맞춘다.
+    var activeDimensions: CMVideoDimensions {
+        CMVideoFormatDescriptionGetDimensions(activeDevice.activeFormat.formatDescription)
     }
 
     /// 권한을 먼저 확보한 뒤 세션을 시작한다.

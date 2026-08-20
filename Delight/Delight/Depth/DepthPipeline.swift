@@ -12,6 +12,7 @@ import Foundation
 import os
 import CoreGraphics
 import ImageIO
+import QuartzCore
 
 enum DepthPipelineError: LocalizedError {
     case modelNotFound
@@ -282,10 +283,20 @@ nonisolated final class DepthPipeline {
         uniforms.historyValid = hasHistory ? 1 : 0
 
         // 배경 기준 affine 정합. 사람이 움직여도 스케일이 고정된다.
-        if let fitted = fitAffineFromBackground() {
-            uniforms.affineA = fitted.a
-            uniforms.affineB = fitted.b
+        // 배경 통계는 천천히 변한다. 매 프레임 800샘플을 정렬할 이유가 없다.
+        // 5프레임마다 갱신해 프레임당 CPU를 1.3ms → 0.3ms로 줄인다.
+        let affineStart = CACurrentMediaTime()
+        frameCounter &+= 1
+        if frameCounter % 5 == 0, let fitted = fitAffineFromBackground() {
+            cachedAffine = fitted
         }
+        if let cached = cachedAffine {
+            uniforms.affineA = cached.a
+            uniforms.affineB = cached.b
+        }
+        timing.affine = (CACurrentMediaTime() - affineStart) * 1000
+
+        let encodeStart = CACurrentMediaTime()
         uniformBuffer.contents().copyMemory(
             from: &uniforms, byteCount: MemoryLayout<SunUniforms>.stride)
 
@@ -422,13 +433,21 @@ nonisolated final class DepthPipeline {
         }
 
         commandBuffer.endCommandBuffer()
-        queue.commit([commandBuffer])
+        timing.encode = (CACurrentMediaTime() - encodeStart) * 1000
 
+        let gpuStart = CACurrentMediaTime()
+        queue.commit([commandBuffer])
         signalValue += 1
         queue.signalEvent(event, value: signalValue)
         guard event.wait(untilSignaledValue: signalValue, timeoutMS: 2000) else { return nil }
+        timing.gpuWait = (CACurrentMediaTime() - gpuStart) * 1000
 
-        measureFlicker(buffer: stabilizedBuffers[historyIndex])
+        // 플리커 측정은 순수 진단이다. 평상시에는 돌리지 않는다.
+        let flickerStart = CACurrentMediaTime()
+        if Self.measuresFlicker {
+            measureFlicker(buffer: stabilizedBuffers[historyIndex])
+        }
+        timing.flicker = (CACurrentMediaTime() - flickerStart) * 1000
 
         // 이번 프레임 출력이 다음 프레임의 히스토리가 된다.
         historyIndex = 1 - historyIndex
@@ -467,6 +486,21 @@ nonisolated final class DepthPipeline {
     private var flickerProbe: [Float] = []
     /// 연속 프레임 간 깊이 변화의 중앙값. 낮을수록 안정적이다.
     private(set) var flickerMetric: Float = 0
+
+    /// 구간별 소요 시간(ms). 전체 시간만 재면 어디가 변동하는지 알 수 없다.
+    struct StageTiming {
+        var encode = 0.0      // 커맨드 인코딩 (CPU)
+        var gpuWait = 0.0     // GPU 완료 대기
+        var affine = 0.0      // 배경 앵커 정합 (CPU, .shared 버퍼 읽기)
+        var flicker = 0.0     // 플리커 측정 (CPU, .shared 버퍼 읽기)
+    }
+    private(set) var timing = StageTiming()
+
+    /// 플리커 측정은 --autostart 진단 모드에서만. 프레임당 1.2ms를 쓴다.
+    static let measuresFlicker = ProcessInfo.processInfo.arguments.contains("--autostart")
+
+    private var frameCounter: UInt64 = 0
+    private var cachedAffine: (a: Float, b: Float)?
 
     /// 안정화가 실제로 효과가 있는지 수치로 본다.
     /// 눈으로는 "덜 떨리는 것 같다"밖에 말할 수 없다.

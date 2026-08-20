@@ -106,6 +106,13 @@ final class LightRig {
     /// 마지막으로 확정한 손 거리(미터). 손을 놓쳐도 이 값을 유지해 조명이 튀지 않는다.
     private(set) var trackedHandZ: Float = 0.5
 
+    /// 광원이 켜져 있는가.
+    ///
+    /// 핀치를 놓으면 즉시 끈다. 손을 놓았는데 광원이 마지막 자리에 남아 있으면,
+    /// 그 자리가 손등 뒤나 얼굴 속일 때 "왜 저기 박혀 있지"가 된다.
+    /// 잡고 있을 때만 존재하게 하면 그 상태 자체가 사라진다.
+    var isLit = true
+
     /// 활성 광원. 핀치가 잡고 있는 대상.
     var activeIndex: Int = 0
     var active: PointLight? {
@@ -217,7 +224,7 @@ final class LightRig {
         uniforms.enableAO = ambientOcclusionEnabled ? 1 : 0
         uniforms.enableSpecular = specularEnabled ? 1 : 0
 
-        let enabled = lights.filter(\.isEnabled).prefix(4)
+        let enabled = isLit ? Array(lights.filter(\.isEnabled).prefix(4)) : []
         uniforms.lightCount = UInt32(enabled.count)
         var packed = [SunLight](repeating: SunLight(), count: 4)
         for (index, light) in enabled.enumerated() {

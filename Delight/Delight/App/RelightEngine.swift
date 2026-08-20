@@ -33,7 +33,13 @@ final class RelightEngine {
     var lightRig = LightRig()
 
     /// 손 인식이 실패해도 데모가 죽지 않도록 하는 폴백. 항상 살려둔다.
-    var inputMode: InputMode = .mouse
+    var inputMode: InputMode = .mouse {
+        didSet {
+            guard inputMode != oldValue else { return }
+            // 손 모드로 바꾸면 핀치할 때까지 광원이 없다.
+            lightRig.isLit = (inputMode == .mouse)
+        }
+    }
 
     enum InputMode: String, CaseIterable, Identifiable {
         case hand = "손"
@@ -121,7 +127,7 @@ final class RelightEngine {
                     try? await Task.sleep(for: .seconds(3))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 플리커=%.5f 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         self.lightRig.temporalBlend > 0 ? "ON " : "OFF",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
@@ -130,6 +136,10 @@ final class RelightEngine {
                         relit == nil ? "nil" : "OK",
                         self.personMatte?.latestTexture() == nil ? "nil" : "OK",
                         self.depthPipeline?.flickerMetric ?? 0,
+                        self.depthPipeline?.timing.encode ?? 0,
+                        self.depthPipeline?.timing.gpuWait ?? 0,
+                        self.depthPipeline?.timing.affine ?? 0,
+                        self.depthPipeline?.timing.flicker ?? 0,
                         self.isHandVisible ? "보임" : "없음",
                         self.pinch.isPinching ? "잡음" : "놓음",
                         self.pinch.normalizedDepth,
@@ -157,13 +167,22 @@ final class RelightEngine {
     func start() {
         guard status != .running else { return }
         do {
+            // 캡처를 먼저 만들어 실제 해상도를 알아낸다.
+            // 출력이 카메라보다 작으면 다운샘플로 디테일이 날아가 "카메라 질감"을 잃는다.
+            let capture = try CameraCapture(device: device)
+            let dimensions = capture.activeDimensions
+            let (outWidth, outHeight) = Self.outputSize(for: dimensions)
+            NSLog("[Delight] 카메라 %dx%d → 출력 %dx%d",
+                  dimensions.width, dimensions.height, outWidth, outHeight)
+
             let pipeline = try DepthPipeline(
                 device: device,
-                outputWidth: Self.outputWidth,
-                outputHeight: Self.outputHeight)
+                outputWidth: outWidth,
+                outputHeight: outHeight)
             self.depthPipeline = pipeline
+            self.calibration = CameraCalibration(width: outWidth, height: outHeight)
+            self.outputSize = SIMD2<Float>(Float(outWidth), Float(outHeight))
 
-            let capture = try CameraCapture(device: device)
             capture.onInterruption = { [weak self] reason in
                 Task { @MainActor in
                     guard let self else { return }
@@ -300,9 +319,13 @@ final class RelightEngine {
     func applyPinch(_ pinch: PinchState) {
         self.pinch = pinch
         guard pinch.isPinching else {
+            // 핀치를 놓으면 광원도 즉시 사라진다.
+            // 손을 놓은 뒤 광원이 손등 뒤나 얼굴 속에 남아 있는 상태 자체를 없앤다.
             lightRig.releaseGrab()
+            lightRig.isLit = false
             return
         }
+        lightRig.isLit = true
         moveLight(toNormalized: SIMD2<Float>(Float(pinch.position.x), Float(pinch.position.y)),
                   handDepth: pinch.normalizedDepth,
                   isGrabbing: true,
@@ -315,24 +338,37 @@ final class RelightEngine {
                    handDepth: Float? = nil,
                    isGrabbing: Bool = false,
                    handScale: Float = 0) {
+        // 마우스로 끌면 항상 켠다. 손 모드에서만 핀치 여부가 광원의 존재를 정한다.
+        if !isGrabbing { lightRig.isLit = true }
         lightRig.place(normalized: normalized,
                        handDepth: handDepth,
                        calibration: calibration,
-                       pixelSize: SIMD2<Float>(Float(Self.outputWidth),
-                                               Float(Self.outputHeight)),
+                       pixelSize: outputSize,
                        affine: SIMD2<Float>(SunUniforms().affineA, SunUniforms().affineB),
                        isGrabbing: isGrabbing,
                        handScale: handScale)
     }
 
-    /// 리라이팅 출력 해상도. 깊이 해상도(518×392)의 3배다.
-    /// 깊이맵은 저해상도로 두고 조명만 고해상도로 계산한다 —
-    /// 깊이는 저주파라 확대해도 티가 안 나지만, 최종 화면은 카메라 해상도여야 한다.
-    static let outputWidth = DepthPipeline.modelWidth * 3      // 1554
-    static let outputHeight = DepthPipeline.modelHeight * 3    // 1176
+    /// 리라이팅 출력 해상도를 카메라 해상도에 맞춘다.
+    /// 깊이맵은 518×392 저해상도로 두고 **조명만** 고해상도로 계산한다 —
+    /// 깊이는 저주파라 확대해도 티가 안 나지만, 최종 화면은 카메라 그대로여야 한다.
+    /// 상한은 GPU 예산 때문이다(레이마칭이 픽셀 수에 선형).
+    static func outputSize(for dimensions: CMVideoDimensions) -> (Int, Int) {
+        let width = Int(dimensions.width), height = Int(dimensions.height)
+        guard width > 0, height > 0 else { return (1554, 1176) }
+        let maxPixels = 1920 * 1440
+        let pixels = width * height
+        guard pixels > maxPixels else { return (width, height) }
+        let scale = (Double(maxPixels) / Double(pixels)).squareRoot()
+        // 컴퓨트 디스패치 정렬을 위해 짝수로 맞춘다.
+        return ((Int(Double(width) * scale) / 2) * 2, (Int(Double(height) * scale) / 2) * 2)
+    }
+
+    /// 실제 출력 해상도. 좌표 변환에 쓰인다.
+    private(set) var outputSize = SIMD2<Float>(1554, 1176)
 
     /// 초점거리 추정치. macOS는 내부파라미터를 주지 않아 추정값을 쓴다.
-    private(set) var calibration = CameraCalibration(width: outputWidth, height: outputHeight)
+    private(set) var calibration = CameraCalibration(width: 1554, height: 1176)
 }
 
 /// 캡처 스레드가 쓰고 렌더 스레드가 읽는 최신 프레임 보관소.
