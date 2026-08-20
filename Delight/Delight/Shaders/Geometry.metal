@@ -84,7 +84,16 @@ kernel void build_gbuffer(device const float   *depth    [[buffer(0)]],
         float lumaBlur   = dot(blur,   float3(0.2126, 0.7152, 0.0722));
         float highPass   = lumaCenter - lumaBlur;
 
-        n.xy += highPass * u.detailStrength;
+        // 저해상도 깊이맵은 얼굴을 매끄러운 타원으로 만든다. 그 위의 스펙큘러는
+        // 완벽한 원형 점이 된다 — 실제 피부는 미세 요철이 하이라이트를 흩는다.
+        // 루마 고주파의 **기울기**를 노멀에 실어 그 요철을 되살린다.
+        // (dfdx/dfdy는 컴퓨트 커널에서 못 쓴다 — 이웃을 직접 떠서 미분한다)
+        float lumaRight = dot(source.sample(linearSampler, uv + float2(texel.x, 0)).rgb,
+                              float3(0.2126, 0.7152, 0.0722));
+        float lumaUp    = dot(source.sample(linearSampler, uv + float2(0, texel.y)).rgb,
+                              float3(0.2126, 0.7152, 0.0722));
+        float2 slope = float2(lumaRight - lumaCenter, lumaUp - lumaCenter);
+        n.xy += (slope * 18.0 + highPass) * u.detailStrength;
         n = normalize(n);
     }
 

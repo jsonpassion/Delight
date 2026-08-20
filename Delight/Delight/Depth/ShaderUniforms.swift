@@ -12,7 +12,7 @@ struct SunLight {
     var position = SIMD3<Float>(0.18, -0.12, 0.45)   // 뷰공간(미터)
     var color    = SIMD3<Float>(1.0, 0.82, 0.62)     // 텅스텐 3200K
     var intensity: Float = 1.6
-    var radius: Float = 0.06                          // 페넘브라 폭
+    var radius: Float = 0.18                          // 페넘브라 + 스펙큘러 로브 폭
 }
 
 struct SunUniforms {

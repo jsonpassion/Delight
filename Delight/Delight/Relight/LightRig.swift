@@ -18,7 +18,8 @@ struct PointLight: Identifiable, Equatable {
     var color: SIMD3<Float> = .init(1.0, 0.82, 0.62)   // 텅스텐 3200K
     var intensity: Float = 1.6
     /// 소프트섀도우 반경(미터). 두 손 핀치 간격에 매핑된다.
-    var radius: Float = 0.06
+    /// 소프트박스 규모. 작으면 하이라이트가 점이 되고 그림자 경계가 칼같아진다.
+    var radius: Float = 0.18
     var isEnabled = true
 
     /// 색온도(K) → 선형 RGB 근사. 슬라이더용.

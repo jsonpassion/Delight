@@ -55,7 +55,6 @@ nonisolated final class DepthPipeline {
     private var signalValue: UInt64 = 0
 
     private let preprocessPSO: any MTLComputePipelineState
-    private let visualizePSO: any MTLComputePipelineState
     private let gbufferPSO: any MTLComputePipelineState
     private let relightPSO: any MTLComputePipelineState
     private let ambientOcclusionPSO: any MTLComputePipelineState
@@ -75,7 +74,6 @@ nonisolated final class DepthPipeline {
     private let uniformBuffer: MTLBuffer
 
     /// 결과 텍스처 링. 렌더러가 읽는 동안 GPU가 다른 것에 쓴다.
-    private var depthTextures: [MTLTexture] = []
     private var relitTextures: [MTLTexture] = []
     private var writeIndex = 0
 
@@ -113,7 +111,6 @@ nonisolated final class DepthPipeline {
             return pso
         }
         self.preprocessPSO = try computePipeline("preprocess_to_tensor")
-        self.visualizePSO  = try computePipeline("visualize_depth")
         self.gbufferPSO    = try computePipeline("build_gbuffer")
         self.relightPSO    = try computePipeline("relight")
         self.ambientOcclusionPSO = try computePipeline("compute_ao")
@@ -170,11 +167,9 @@ nonisolated final class DepthPipeline {
         // 통합 메모리라 비용이 거의 없다(깊이 텐서에서 이미 검증).
         textureDescriptor.storageMode = .shared
         for _ in 0..<3 {
-            guard let depthTexture = device.makeTexture(descriptor: textureDescriptor),
-                  let relitTexture = device.makeTexture(descriptor: textureDescriptor) else {
+            guard let relitTexture = device.makeTexture(descriptor: textureDescriptor) else {
                 throw DepthPipelineError.resourceAllocationFailed
             }
-            depthTextures.append(depthTexture)
             relitTextures.append(relitTexture)
         }
 
@@ -225,7 +220,6 @@ nonisolated final class DepthPipeline {
         staticResidency.addAllocation(outBuffer)
         staticResidency.addAllocation(uniformBuffer)
         staticResidency.addAllocation(heap)
-        for texture in depthTextures { staticResidency.addAllocation(texture) }
         for texture in relitTextures { staticResidency.addAllocation(texture) }
         staticResidency.addAllocation(positionTexture)
         staticResidency.addAllocation(normalTexture)
@@ -263,10 +257,10 @@ nonisolated final class DepthPipeline {
 
     /// 한 프레임을 처리한다. GPU 완료까지 기다리므로 **전용 스레드에서 호출할 것**.
     /// - Parameter lighting: 메인 액터의 LightRig가 채운 스냅샷. 값 타입이라 그대로 건너온다.
-    /// - Returns: 깊이 시각화와 재조명 결과.
+    /// - Returns: 재조명 결과 텍스처.
     func process(source: MTLTexture,
                  lighting: SunUniforms? = nil,
-                 segmentation: MTLTexture? = nil) -> (depth: MTLTexture, relit: MTLTexture)? {
+                 segmentation: MTLTexture? = nil) -> MTLTexture? {
         if let lighting {
             // 해상도·텐서 레이아웃은 파이프라인이 소유한다. 조명 쪽 값만 받아들인다.
             var merged = lighting
@@ -300,9 +294,8 @@ nonisolated final class DepthPipeline {
         uniformBuffer.contents().copyMemory(
             from: &uniforms, byteCount: MemoryLayout<SunUniforms>.stride)
 
-        let target = depthTextures[writeIndex]
         let relitTarget = relitTextures[writeIndex]
-        writeIndex = (writeIndex + 1) % depthTextures.count
+        writeIndex = (writeIndex + 1) % relitTextures.count
 
         // 카메라 텍스처는 CVMetalTextureCache가 돌려쓰므로 매 프레임 레지던시를 갱신한다.
         frameResidency.removeAllAllocations()
@@ -361,19 +354,6 @@ nonisolated final class DepthPipeline {
                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
             encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
                             visibilityOptions: .device)
-            encoder.endEncoding()
-        }
-
-        // [C2] 시각화 — 안정화된 깊이를 보여준다 (반드시 안정화 뒤에 인코딩)
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            argumentTable.setAddress(stabilizedBuffers[historyIndex].gpuAddress, index: 0)
-            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 1)
-            argumentTable.setTexture(target.gpuResourceID, index: 0)
-            encoder.setArgumentTable(argumentTable)
-            encoder.setComputePipelineState(visualizePSO)
-            encoder.dispatchThreads(
-                threadsPerGrid: MTLSize(width: target.width, height: target.height, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
             encoder.endEncoding()
         }
 
@@ -453,7 +433,7 @@ nonisolated final class DepthPipeline {
         historyIndex = 1 - historyIndex
         hasHistory = true
 
-        return (depth: target, relit: relitTarget)
+        return relitTarget
     }
 
     /// 최신 재조명 결과를 PNG로 저장한다. 화질 확인용 진단 경로.
