@@ -6,8 +6,37 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DE1000000000000000000001_BF /* DelightCamera.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = DE1000000000000000000001 /* DelightCamera.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DE100000000000000000000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9E7156C93035584200E213B4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DE1000000000000000000000;
+			remoteInfo = DelightCamera;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		DE1000000000000000000009 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Library/SystemExtensions";
+			dstSubfolderSpec = 16;
+			files = (
+				DE1000000000000000000001_BF /* DelightCamera.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		9E7156D13035584200E213B4 /* Delight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Delight.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DE1000000000000000000001 /* DelightCamera.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = DelightCamera.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +45,22 @@
 			path = Delight;
 			sourceTree = "<group>";
 		};
+		DE1000000000000000000002 /* DelightCamera */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DelightCamera;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		9E7156CE3035584200E213B4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DE1000000000000000000004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -34,6 +75,7 @@
 			children = (
 				9E7156D33035584200E213B4 /* Delight */,
 				9E7156D23035584200E213B4 /* Products */,
+				9ECBA50A30369C9000EC25EB /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -41,8 +83,17 @@
 			isa = PBXGroup;
 			children = (
 				9E7156D13035584200E213B4 /* Delight.app */,
+				DE1000000000000000000001 /* DelightCamera.systemextension */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		9ECBA50A30369C9000EC25EB /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				DE1000000000000000000002 /* DelightCamera */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -55,10 +106,12 @@
 				9E7156CD3035584200E213B4 /* Sources */,
 				9E7156CE3035584200E213B4 /* Frameworks */,
 				9E7156CF3035584200E213B4 /* Resources */,
+				DE1000000000000000000009 /* Embed System Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				DE100000000000000000000A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				9E7156D33035584200E213B4 /* Delight */,
@@ -69,6 +122,28 @@
 			productName = Delight;
 			productReference = 9E7156D13035584200E213B4 /* Delight.app */;
 			productType = "com.apple.product-type.application";
+		};
+		DE1000000000000000000000 /* DelightCamera */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DE1000000000000000000006 /* Build configuration list for PBXNativeTarget "DelightCamera" */;
+			buildPhases = (
+				DE1000000000000000000003 /* Sources */,
+				DE1000000000000000000004 /* Frameworks */,
+				DE1000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DE1000000000000000000002 /* DelightCamera */,
+			);
+			name = DelightCamera;
+			packageProductDependencies = (
+			);
+			productName = DelightCamera;
+			productReference = DE1000000000000000000001 /* DelightCamera.systemextension */;
+			productType = "com.apple.product-type.system-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -100,12 +175,20 @@
 			projectRoot = "";
 			targets = (
 				9E7156D03035584200E213B4 /* Delight */,
+				DE1000000000000000000000 /* DelightCamera */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		9E7156CF3035584200E213B4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DE1000000000000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +205,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DE1000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DE100000000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DE1000000000000000000000 /* DelightCamera */;
+			targetProxy = DE100000000000000000000B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		9E7156DC3035584300E213B4 /* Debug */ = {
@@ -317,6 +415,48 @@
 			};
 			name = Release;
 		};
+		DE1000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = DelightCamera/DelightCamera.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QYZ2Q85Y7Z;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DelightCamera/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "forgelab.aitech-gmail.com.Delight.Camera";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		DE1000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = DelightCamera/DelightCamera.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QYZ2Q85Y7Z;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DelightCamera/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "forgelab.aitech-gmail.com.Delight.Camera";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -334,6 +474,15 @@
 			buildConfigurations = (
 				9E7156DF3035584300E213B4 /* Debug */,
 				9E7156E03035584300E213B4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DE1000000000000000000006 /* Build configuration list for PBXNativeTarget "DelightCamera" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE1000000000000000000007 /* Debug */,
+				DE1000000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -11,6 +11,7 @@ Xcode 프로젝트는 `Delight/` 아래에 있고, 그 외 자산은 리포 루�
 Delight/                     Xcode 프로젝트
   Delight.xcodeproj
   Delight.entitlements
+  DelightCamera/             CMIO 카메라 확장 타깃 (top-level 코드 있음 — 앱 타깃 아님)
   Delight/                   앱 타깃 (Xcode 동기화 폴더)
     App/       엔진 오케스트레이터, 앱 진입점
     Capture/   AVFoundation → CVMetalTextureCache
@@ -43,6 +44,11 @@ f32 518열이 528 elem이 된다. 셰이더는 `depthRowStride`로 인덱싱해�
 `cameraIntrinsicMatrixDelivery` 모두 `API_UNAVAILABLE(macos)`. 얼굴 기반으로 추정한다.
 
 **레이마칭 thickness가 가장 위험한 파라미터다.** 크면 화면이 검게 죽고, 작으면 그림자가 안 생긴다.
+
+**카메라 확장은 설치 조건이 따로 있다.** 빌드·임베드는 되지만 설치하려면
+Developer ID 서명 + 공증 + `/Applications` 설치가 필요하다. 개발 중에는 SIP를 끄고
+`systemextensionsctl developer on`을 켜야 Apple Development 서명으로 설치된다.
+확장은 세션 중 라이브 교체가 안 되므로 코드를 고칠 때마다 재부팅이다.
 
 **샌드박스는 꺼져 있어야 한다 (`ENABLE_APP_SANDBOX = NO`).** Xcode 템플릿 기본값이 YES라
 entitlements 파일에 sandbox 키가 없어도 빌드 설정이 주입한다. 켜지면 컨테이너 밖
