@@ -152,6 +152,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#verify">검증 방법론</a></li>
     <li><a href="#budget">성능 예산</a></li>
     <li><a href="#profiling">변동폭의 정체</a></li>
+    <li><a href="#broadcast">Zoom까지 가는 길</a></li>
     <li><a href="#repro">재현 절차</a></li>
   </ol>
 </nav>
@@ -1208,6 +1209,145 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
       전체 시간 하나만 보고 있었을 때는 그럴듯한 가설을 반증할 방법이 없었다.
       구간을 쪼개니 CPU가 무죄라는 것이 즉시 나왔고, 이등분하니 첫 가설이 즉시 기각됐다.
       <strong>가설을 세우기 전에 계측을 쪼개는 것이 순서다.</strong></p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="broadcast">
+  <h2><span class="num">09-2</span>Zoom까지 가는 길</h2>
+  <p class="dek">렌더링한 프레임을 남의 앱 안에 넣는 일은 그래픽 문제가 아니라 행정 문제다. 그래서 행정 비용이 0인 경로를 먼저 뚫었다.</p>
+
+  <p>Zoom 진입 경로는 처음부터 셋으로 쪼개 두고 있었다. 이번에 실행한 것은 그중 둘째다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>경로</th><th>방식</th><th>치러야 할 값</th></tr></thead>
+      <tbody>
+        <tr><td>CMIO Camera Extension</td><td class="note">우리가 시스템 확장을 만들어 Zoom의 카메라 목록에 직접 뜬다</td><td class="note">서명 · 공증 · 시스템 확장 승인. 게다가 확장은 세션 중 <strong>라이브 교체가 안 된다</strong> — 코드 한 줄 고칠 때마다 재부팅이다</td></tr>
+        <tr class="lead"><td>Syphon → OBS 가상카메라</td><td class="note">IOSurface 텍스처만 publish하면 OBS의 Syphon Client가 받고, OBS의 가상카메라가 Zoom으로 나간다</td><td class="note"><strong>없다.</strong> 서명 · 공증 · 시스템 확장 · 재부팅이 전부 불필요하다</td></tr>
+        <tr><td>화면공유</td><td class="note">최후 보루</td><td class="note">—</td></tr>
+      </tbody>
+      <caption>OBS의 카메라 확장은 이미 서명·공증되어 있다. 우리는 텍스처만 넘기면 된다 — 남이 이미 치른 행정 비용을 빌려 쓰는 것이다. CMIO는 다음 단계(P7)로 남긴다.</caption>
+    </table>
+  </div>
+
+  <h3>프레임워크가 아니라 소스로 — 그리고 그 대가</h3>
+  <p>Syphon을 프레임워크로 임베드하지 않고 <strong>소스 32개 파일을 앱 타깃에 직접 넣었다</strong>
+    (BSD 라이선스, License.txt 동봉). Metal 서버 경로만 의존성을 따라가며 추렸다 — OpenGL 경로는 제외했다.
+    이유는 이 프로젝트의 구조다. 프레임워크 임베드는 pbxproj에 링크·임베드·서명 단계를 새로 추가해야 하는데,
+    <strong>동기화 폴더</strong>(<code>PBXFileSystemSynchronizedRootGroup</code>)를 쓰는 이 프로젝트에서는
+    소스를 폴더에 넣기만 하면 자동으로 타깃에 들어간다. 빌드 설정에 손댄 것은 브리징 헤더 한 줄뿐이다.</p>
+
+  <p>대신 대가가 있다. <strong>프레임워크가 자동으로 주던 것이 전부 사라진다.</strong>
+    뒤이어 나온 에러 셋은 증상이 제각각이지만 뿌리가 하나다.</p>
+
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">use of undeclared identifier 'SYPHONLOG'</div>
+      <h4>prefix header는 따라오지 않는다</h4>
+      <p><code>SYPHONLOG</code>는 <code>Syphon_Prefix.pch</code>에 있던 매크로다.
+        prefix header는 <strong>프레임워크 타깃의 빌드 설정</strong>이지 소스의 일부가 아니다.
+        소스만 복사하면 .pch는 적용되지 않는다.</p>
+      <p class="fix">→ <code>SyphonPrivate.h</code>에 매크로를 정의해 넣었다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">unknown type name 'NSString' · unknown type name 'NSRunningApplication' · use of undeclared identifier 'kCVPixelFormatType_32BGRA'</div>
+      <h4>umbrella header가 해주던 import가 없다</h4>
+      <p>프레임워크로 쓰면 umbrella header가 Foundation · Metal · AppKit · CoreVideo를 알아서 끌어온다.
+        소스를 직접 넣으면 각 파일은 자기가 필요한 것을 스스로 밝혀야 한다.</p>
+      <p class="fix">→ 각 파일에 필요한 프레임워크를 <strong>명시적으로</strong> import했다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">Undefined symbol: _SyphonDispatchSourceCreate</div>
+      <h4>컴파일이 아니라 링크에서야 드러났다</h4>
+      <p><code>SyphonDispatch.c</code>를 빠뜨리고 <strong>헤더만 복사</strong>했다.
+        헤더가 있으니 컴파일은 전부 통과한다. 심볼이 없다는 사실은 <strong>링크 단계에서야</strong> 나온다.</p>
+      <p class="fix">→ 빠진 .c를 넣었다. 소스 포함에서 파일 목록의 누락은 컴파일러가 아니라 링커가 잡는다.</p>
+    </div>
+  </div>
+
+  <p>같이 한 일은 import 스타일 일괄 치환이다. 프레임워크 스타일 경로는 프레임워크가 없으면 성립하지 않는다.</p>
+
+  <pre><code><span class="cmt">// ✗ 프레임워크 스타일 — 임베드했을 때만 성립한다</span>
+#import &lt;Syphon/SyphonServerBase.h&gt;
+<span class="cmt">// ✓ 소스로 포함했으므로</span>
+<span class="hl">#import "SyphonServerBase.h"</span></code></pre>
+
+  <div class="call">
+    <span class="lbl">뿌리는 하나다</span>
+    <p>매크로 미정의, 타입 미정의, 링커 미해결 — 셋은 서로 다른 버그처럼 보이지만
+      전부 <strong>"프레임워크가 자동으로 주던 것이 사라졌다"</strong>는 한 문장으로 설명된다.
+      소스 포함을 택하는 순간 prefix header · umbrella import · 파일 목록을
+      <strong>우리가 직접 다시 만들어야 한다</strong>는 뜻이었다.
+      이걸 처음에 알았다면 세 에러를 한 번에 처리했을 것이다.</p>
+  </div>
+
+  <h3>검증 — OBS를 설치하지 않고 확인한다</h3>
+  <p>Syphon 서버는 <strong>분산 알림</strong>으로 자기 존재를 광고한다. 그래서
+    <code>Tools/syphon_probe.m</code>을 만들었다 — 서버 디렉토리를 조회하는 <strong>외부 프로세스</strong>다.
+    앱을 <code>--broadcast</code>로 띄우고 프로브를 돌렸다.</p>
+
+  <pre><code>$ ./Tools/syphon_probe
+<span class="hl">서버: Delight (Delight)</span></code></pre>
+
+  <div class="call good">
+    <span class="lbl">앱 안에서 로그를 찍는 것은 증명이 아니다</span>
+    <p>"서버를 만들었다"는 우리 앱의 로그는 <strong>우리 앱만의 주장</strong>이다.
+      Syphon이 성립하려면 <strong>다른 프로세스</strong>가 그 서버를 볼 수 있어야 한다 —
+      OBS도 그 다른 프로세스 중 하나일 뿐이다. 그래서 검증 도구를 앱 밖에 두었다.
+      프로브에서 보이면 OBS에서도 보인다.</p>
+  </div>
+
+  <p>여기서 시간을 쓴 지점이 하나 있다. 알림 이름은 <strong>상수명이 아니라 실제 문자열</strong>이다.
+    <code>SyphonServerAnnounce</code>는 <code>SyphonPrivate.h</code>의 <code>#define</code>이고,
+    실제 값은 따로 있다. 처음에 상수명을 그대로 문자열로 넘겨 "등록된 서버 없음"을 받았다.</p>
+
+  <pre><code><span class="cmt">// ✗ 상수의 이름을 문자열로 쓴다 — 알림이 영원히 오지 않는다</span>
+addObserver:... name:@"SyphonServerAnnounce"
+<span class="cmt">// ✓ #define의 값이 실제 알림 이름이다</span>
+addObserver:... name:<span class="hl">@"info.v002.Syphon.ServerAnnounce"</span></code></pre>
+
+  <p>앱 쪽 로그는 <code>[Delight] Syphon 서버 시작됨: Delight</code>이고 상태 라인에 <code>송출=ON</code>이 뜬다.
+    툴바에 송출 토글을 뒀다.</p>
+
+  <h3>거울상은 송출에 적용하지 않는다</h3>
+  <p>프리뷰는 좌우 반전이다 — 사용자가 거울에 익숙하기 때문이다(<a href="#pinch">§06-1</a>).
+    그런데 <strong>상대방이 보는 영상은 비반전이 정석이다.</strong> 반전은 어디까지나 프리뷰 전용이다.</p>
+  <p>이 구분이 <code>FrameSink</code> 경계에서 자연히 지켜진다. 미러는
+    <code>composite_split</code> 커널, 즉 <strong>프리뷰 경로 안에만</strong> 있고,
+    <code>SyphonSink.submit</code>은 <strong>원본 텍스처를 그대로</strong> 넘긴다.
+    송출 쪽에서 뒤집지 않기로 결정한 것이 아니라, 뒤집는 코드가 애초에 그 경로에 없다.
+    싱크 추상화가 정책을 대신 강제하는 셈이다.</p>
+
+  <h3>OBS 연결 — 순서가 중요하다</h3>
+  <ol class="body">
+    <li>OBS에서 소스 추가 → <strong>Syphon Client</strong> → 서버 목록에서 <strong>"Delight"</strong> 선택</li>
+    <li>OBS <strong>가상 카메라 시작</strong></li>
+    <li><strong>Zoom을 마지막에 실행</strong> — Zoom은 <strong>시작할 때 한 번만</strong> 장치를 스캔한다.
+      먼저 켜 두면 가상 카메라가 목록에 없다.</li>
+  </ol>
+  <p>3번 때문에 이 순서를 설정 화면에 그대로 적어뒀다. 모르면 "송출이 안 된다"로 오진하기 딱 좋은 지점이다.</p>
+
+  <div class="call">
+    <span class="lbl">정직하게 — 미해결로 남긴 간헐 크래시</span>
+    <p>송출을 검증하는 동안 <code>VFX</code> 프레임워크의
+      <code>NSBundle URLForResource</code> → <code>CFBundleCreate</code>에서
+      <strong>EXC_BAD_ACCESS가 1회</strong> 났다. 새로 붙인 것이 Syphon뿐이니 의심은 자연스럽다.
+      그래서 추측하지 않고 <a href="#crash-triage">§07-1</a>과 같은 방법으로 조건을 갈랐다.</p>
+    <div class="tw" style="margin:.8rem 0 0">
+      <table>
+        <thead><tr><th>조건</th><th>실행</th><th>크래시</th></tr></thead>
+        <tbody>
+          <tr><td>송출 OFF</td><td class="n">14초</td><td class="n">0</td></tr>
+          <tr><td>송출 ON</td><td class="n">14초</td><td class="n">0</td></tr>
+          <tr><td>송출 ON + 매트 OFF</td><td class="n">14초</td><td class="n">0</td></tr>
+        </tbody>
+        <caption>세 조건 모두 재현되지 않았다 — Syphon은 원인이 아니다.</caption>
+      </table>
+    </div>
+    <p style="margin-top:.8rem">앞서 기록한 <strong>Espresso/Vision 모델 로드 계열의 간헐 레이스</strong>와
+      같은 부류로 보인다(<a href="#crash-triage">§07-1</a>). 재현 조건을 못 잡았으므로
+      고쳤다고 쓰지 않는다. <strong>미해결로 남긴다.</strong></p>
   </div>
 </section>
 

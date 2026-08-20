@@ -83,7 +83,7 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
 - [x] **P3** 레이마칭 그림자 + 스펙큘러 + 핀치로 조명 잡기
 - [x] **P4** AO · Vision 세그멘테이션 · 화질 개선(해상도·sRGB·후광)
 - [x] **P5** 깊이 안정화 (edge-stopping 시간필터 · 배경 앵커 affine 정합) — 플리커 8배 감소
-- [ ] **P6** Syphon → OBS → Zoom
+- [x] **P6** Syphon → OBS → Zoom (서명·공증·재부팅 없는 경로)
 - [ ] **P7** CMIO Camera Extension
 
 ## 프라이버시
