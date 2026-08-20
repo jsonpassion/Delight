@@ -59,6 +59,11 @@ entitlements 파일에 sandbox 키가 없어도 빌드 설정이 주입한다. �
 
 여기서 크게 벗어나면 회귀를 의심한다.
 
+**양자화는 검토 완료 — 현재 툴체인에서는 쓰지 않는다** (2026-08-19 실측).
+INT8 mlpackage는 `metal-package-builder` 변환은 되지만 GPU에서 타임아웃(실행 불가),
+Core ML 경로에서는 ANE 20.31ms로 F16과 동일해 이득이 없다. 파일 크기만 절반.
+툴체인이 좋아지면 `Tools/quantize_model.py`와 `Tools/fetch_variants.sh`로 재검토한다.
+
 ## 빌드
 
 ```bash
@@ -69,6 +74,8 @@ Metal 셰이더에는 별도 툴체인이 필요하다: `xcodebuild -downloadCom
 
 ## 작업 원칙
 
+- **코드가 바뀌면 웹 문서도 같은 커밋에서 바뀐다.** `web-sync` 스킬/서브에이전트를 쓴다.
+  커밋 전 `python3 Tools/check_html.py` 필수
 - 각 단계는 **눈에 보이는 성과**로 끝낸다. 보이지 않는 진척은 진척이 아니다
 - 데모 안전장치인 **마우스 폴백**을 항상 살려둔다
 - 벤치 수치만으로 판단하지 않는다 — 결정적 입력을 넣고 출력을 확인한다
