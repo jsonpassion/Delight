@@ -42,6 +42,11 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Toggle("송출", systemImage: "dot.radiowaves.left.and.right", isOn: $engine.isBroadcasting)
+                    .help("Syphon으로 내보냅니다. OBS의 Syphon Client 소스에서 \"Delight\"를 선택하세요.")
+                    .disabled(engine.status != .running)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Toggle("반전", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right",
                        isOn: $engine.isMirrored)
                     .help("거울상 프리뷰입니다. 송출 영상에는 적용되지 않습니다.")
