@@ -611,7 +611,8 @@ nonisolated final class DepthPipeline {
     /// 손끝은 얇아서 최근접 한 점을 그냥 읽으면 깊이가 배경으로 샌다.
     /// 그래서 이웃에서 **가장 가까운 쪽 분위수**를 쓴다 — 평균이나 중앙값이면
     /// 배경 픽셀이 섞여 광원이 뒤로 밀린다. (docs/01-architecture.md §8)
-    func sampleInverseDepth(atNormalized point: SIMD2<Float>, radius: Int = 2) -> Float? {
+    func sampleInverseDepth(atNormalized point: SIMD2<Float>, radius: Int = 2)
+        -> (depth: Float, reliable: Bool)? {
         guard depthBuffer.storageMode == .shared else { return nil }
 
         let cx = Int((point.x * Float(Self.modelWidth)).rounded())
@@ -636,7 +637,13 @@ nonisolated final class DepthPipeline {
 
         neighborhood.sort()
         let index = min(Int(Float(neighborhood.count) * 0.8), neighborhood.count - 1)
-        return neighborhood[index]
+        let depth = neighborhood[index]
+
+        // 이웃 깊이의 퍼짐이 크면 여기는 **가림 경계**다.
+        // 손과 그 뒤 물체가 한 창에 같이 잡혀 있다는 뜻이라, 어느 쪽을 골라도 틀릴 수 있다.
+        // 이럴 때는 추측하지 않고 신뢰 없음으로 표시한다.
+        let spread = neighborhood[neighborhood.count - 1] - neighborhood[0]
+        return (depth, spread < 0.12)
     }
 
     // MARK: 텐서
