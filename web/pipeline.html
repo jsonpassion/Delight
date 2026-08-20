@@ -145,6 +145,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#pinch">핀치: 손이 곧 컨트롤러</a></li>
     <li><a href="#quality">화질 해부</a></li>
     <li><a href="#occlusion-bug">깊이맵이 거짓말할 때</a></li>
+    <li><a href="#stabilize">안정화: 떨림을 8배 줄이기</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
@@ -646,11 +647,66 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
 </section>
 
 <!-- ─────────────────────────────────────── -->
+<section id="stabilize">
+  <h2><span class="num">06-4</span>안정화: 떨림을 8배 줄이기</h2>
+  <p class="dek">정지해 있어도 깊이는 프레임마다 다르게 나온다. 그 떨림이 노멀과 그림자를 타고 증폭된다.</p>
+
+  <p>단안 깊이 추론은 프레임마다 독립적으로 돈다. 입력이 거의 같아도 출력은 미세하게 다르고,
+    조명 계산이 그 차이를 그대로 받는다. 먼저 떨림을 수치로 잡았다 —
+    <strong>연속 프레임 간 깊이 변화의 중앙값</strong>(16 px 서브샘플, EMA)을 플리커 지표로 삼고,
+    같은 세션의 앞 15초를 안정화 OFF, 뒤 15초를 ON으로 A/B를 돌렸다
+    (M5, <code>--autostart</code>, 정지 자세).</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>안정화</th><th class="n">1</th><th class="n">2</th><th class="n">3</th><th class="n">4</th><th class="n">5</th></tr></thead>
+      <tbody>
+        <tr><td>OFF (앞 15초)</td><td class="n">0.00208</td><td class="n">0.00290</td><td class="n">0.00439</td><td class="n">0.00284</td><td class="n">0.00425</td></tr>
+        <tr class="lead"><td>ON (뒤 15초)</td><td class="n">0.00049</td><td class="n">0.00030</td><td class="n">0.00074</td><td class="n">0.00035</td><td class="n">0.00036</td></tr>
+      </tbody>
+      <caption>플리커 지표 로그 5회, 시간순. 약 8배 감소다. 지표는 연속 프레임 간 깊이 변화의 중앙값(16 px 서브샘플)에 EMA를 걸었다.</caption>
+    </table>
+  </div>
+
+  <h3>edge-stopping 시간필터 — 어디서 섞기를 멈출지</h3>
+  <p>구현은 시간축 블렌딩이다(<code>Stabilize.metal</code>). 히스토리를 현재 깊이에 섞되,
+    <strong>픽셀마다 히스토리를 얼마나 믿을지</strong>를 두 가중치로 정한다.</p>
+
+  <pre><code><span class="cmt">// 히스토리 신뢰도 = 색 가중치 × 깊이 가중치 × temporalBlend</span>
+<span class="hl">w = exp(−|Δc|²/σc) × exp(−|Δd|/σd) × 0.85</span>
+<span class="cmt">// Δc: 현재 프레임과 히스토리의 색 차이, Δd: 깊이 차이</span></code></pre>
+
+  <p>깊이 가중치만으로는 안 된다. <strong>색 가중치를 빼면 움직일 때 고스팅이 생긴다</strong> —
+    이전 프레임의 깊이가 잔상으로 끌려온다. 색은 물체가 지나간 픽셀에서 확실하게 변하므로,
+    색이 변한 곳에서 블렌딩을 끊는 것이 이 필터가 "edge-stopping"인 이유다.</p>
+
+  <h3>배경 앵커 — 프레임 전체가 함께 출렁일 때</h3>
+  <p>픽셀 단위 떨림과 별개로, 상대 깊이는 프레임 전체의 스케일·오프셋이 함께 출렁인다.
+    그래서 시간필터와 함께 affine 정합을 둔다. 앵커는 <strong>하위 45% 역깊이 — 즉 배경</strong>만 쓴다.
+    전경(사람·손)은 실제로 움직이는 대상이라 정합 기준으로 삼으면 진짜 움직임까지 지워버리고,
+    배경은 웹캠 장면에서 사실상 고정이기 때문이다. 피팅은 중앙값/MAD 기반 robust fit이다.</p>
+
+  <p>기준(레퍼런스)은 rate 0.02로 <strong>아주 느리게</strong> 갱신한다.
+    빠르게 갱신하면 앵커가 같이 흘러간다 — 잡으려는 드리프트를 기준이 따라가버리면 정합이 무의미해진다.
+    폭주 방지도 있다: 피팅된 <code>a</code>가 기준의 0.5~2.0배를 벗어나면 그 프레임은 보정하지 않는다.</p>
+
+  <p>이 패스를 단일 커맨드 버퍼에 끼워 넣다가 인코딩 순서 해저드를 하나 만들었다 —
+    <a href="#bugs">§07</a>에 적었다.</p>
+
+  <div class="call bad">
+    <span class="lbl">정직한 성능 관찰 — 미해결</span>
+    <p>안정화 ON 구간 후반에 깊이 처리 시간이 <strong>20.7 ms → 33.5 ms까지 변동</strong>했다.
+      30 fps 예산(33.3 ms)의 경계다. 원인은 미확정 — 세그멘테이션(15 Hz)과의 간섭으로 추정하지만
+      아직 확인하지 못했다. 추후 과제로 기록해 둔다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
 <section id="bugs">
   <h2><span class="num">07</span>실제로 깨진 것들</h2>
   <p class="dek">문서에 안 나오는 것들. 여기 적힌 시간이 다음 사람이 아끼는 시간이다.</p>
 
-  <h3>Metal 4 ML 인코더에서 부딪힌 여섯 가지</h3>
+  <h3>Metal 4에서 부딪힌 일곱 가지</h3>
   <div class="bugs">
     <div class="bug">
       <div class="sym">Tensor Descriptor Validation</div>
@@ -691,6 +747,16 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
       <h4>mtlpackage의 진입점은 "main"</h4>
       <p><code>metal-package-builder</code>가 만든 패키지 내부는 <code>library.mpsgraphpackage</code>다.</p>
       <p class="fix">→ <code>library.functionNames</code>로 확인. 항상 <code>["main"]</code>이었다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">배리어 없는 RAW 해저드 — 시각화가 안정화 결과를 먼저 읽음</div>
+      <h4>단일 커맨드 버퍼에서는 인코딩 순서가 곧 의존성 선언이다</h4>
+      <p>시각화 패스가 <code>stabilizedBuffers[historyIndex]</code>를 읽는데, 같은 커맨드 버퍼에서
+        안정화 패스가 그 버퍼에 <strong>나중에</strong> 쓰도록 인코딩돼 있었다.
+        첫 프레임엔 비초기화 메모리를 읽고, 이후엔 GPU 재정렬에 따라 정의되지 않은 동작이다.
+        단일 커맨드 버퍼 설계는 CPU 동기화가 없어 빠르지만, 패스를 추가할 때
+        "어디에 끼워 넣는가"가 그대로 정확성 문제가 된다.</p>
+      <p class="fix">→ 안정화를 시각화 앞으로 옮기고, 주석에 "반드시 안정화 뒤에 인코딩"을 박았다.</p>
     </div>
   </div>
 
@@ -801,6 +867,27 @@ float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">//
     </table>
   </div>
 
+  <h3>양자화 검토 — 현재 툴체인에서는 쓰지 않는다</h3>
+  <p>초기 설계(<code>docs/02-model-and-quality.md</code> §3-1)의 속도 개선 순서 ①은 INT8 벤치였다.
+    apple이 배포하는 INT8 변형(24 MB — F16의 절반)을 받아 실측했다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>경로</th><th class="n">INT8</th><th class="n">F16</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td>Metal 4 ML</td><td class="n">실행 불가</td><td class="n">15.42 ms</td>
+          <td class="note"><code>metal-package-builder</code> 변환은 성공하지만
+            <code>dispatchNetwork</code>가 GPU에서 타임아웃</td></tr>
+        <tr><td>Core ML ANE</td><td class="n">20.31 ms</td><td class="n">20.78 ms</td><td class="note">사실상 동일</td></tr>
+        <tr><td>Core ML cpu+GPU</td><td class="n">18.50 ms</td><td class="n">19.84 ms</td><td class="note">−7%</td></tr>
+      </tbody>
+      <caption>속도 이득이 없고, 주력인 Metal 4 경로는 아예 돌지 않는다. 결론: F16 유지. 파일 크기 절반은 배포 시에만 의미가 있다. 속도 개선 순서 ①은 실측으로 소진됐다.</caption>
+    </table>
+  </div>
+
+  <p>스크립트는 남겼다 — <code>Tools/fetch_variants.sh</code>(변형 다운로드+변환),
+    <code>Tools/quantize_model.py</code>(coremltools 양자화/fp16io — 별도 venv에서 실행해 출력을 치환한다).</p>
+
   <p>품질이 부족하면 모델을 바꾸기 전에 <a href="#budget">§09의 네 단계</a>를 먼저 소진한다.
     도메인이 "웹캠 앞 상반신"으로 좁으므로, 같은 파라미터 수로 증류하는 쪽이
     더 큰 모델을 가져오는 것보다 대개 이득이다.</p>
@@ -867,7 +954,8 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
 
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
   <ol class="body">
-    <li><strong>INT8 / palettized 변형</strong> — 다운로드만 하면 10분</li>
+    <li><strong>INT8 / palettized 변형</strong> — 실측 완료, 기각(<a href="#model">§07-1</a>).
+      Metal 4 경로에서 실행 불가, Core ML에서도 이득 없음</li>
     <li><strong>입력 해상도 축소</strong> 518×392 → 448×336 → 392×294.
       깊이는 저해상도에 놀랍게 관대하다. 어차피 업샘플한다</li>
     <li><strong>f32 인터페이스를 f16으로</strong> — coremltools 재변환으로 가능한지 확인</li>

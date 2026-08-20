@@ -50,6 +50,12 @@ typedef struct {
     uint  enableSpecular;
     uint  hasSegmentation;   // 0이면 깊이 기반 근사 매트로 폴백
 
+    // 깊이 안정화.
+    uint  historyValid;      // 첫 프레임에는 히스토리가 없다
+    float temporalBlend;     // 히스토리 비중
+    float colorSigma;        // 색 변화 허용폭. 크면 고스팅, 작으면 떨림
+    float depthSigma;        // 깊이 변화 허용폭
+
     uint  lightCount;
     SunLight lights[4];
 } SunUniforms;
@@ -60,7 +66,7 @@ typedef struct {
 // 값을 바꿔야 한다면 Swift 쪽 MemoryLayout<...>.stride 를 찍어 확인할 것.
 #ifdef __METAL_VERSION__
 static_assert(sizeof(SunLight)    == 48,  "SunLight 레이아웃이 Swift 미러와 다르다");
-static_assert(sizeof(SunUniforms) == 304, "SunUniforms 레이아웃이 Swift 미러와 다르다");
+static_assert(sizeof(SunUniforms) == 320, "SunUniforms 레이아웃이 Swift 미러와 다르다");
 #endif
 
 #endif /* ShaderTypes_h */

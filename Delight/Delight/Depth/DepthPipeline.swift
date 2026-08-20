@@ -58,12 +58,18 @@ nonisolated final class DepthPipeline {
     private let gbufferPSO: any MTLComputePipelineState
     private let relightPSO: any MTLComputePipelineState
     private let ambientOcclusionPSO: any MTLComputePipelineState
+    private let stabilizePSO: any MTLComputePipelineState
     private let mlPSO: any MTL4MachineLearningPipelineState
     private let intermediatesHeap: MTLHeap
 
     private let inputBuffer: MTLBuffer
     private let inputTensor: MTLTensor
     private let depthBuffer: MTLBuffer
+    /// 안정화 결과 핑퐁. 이번 프레임 출력이 다음 프레임의 히스토리가 된다.
+    private var stabilizedBuffers: [MTLBuffer] = []
+    private var colorHistoryTextures: [MTLTexture] = []
+    private var historyIndex = 0
+    private var hasHistory = false
     private let outputTensor: MTLTensor
     private let uniformBuffer: MTLBuffer
 
@@ -110,6 +116,7 @@ nonisolated final class DepthPipeline {
         self.gbufferPSO    = try computePipeline("build_gbuffer")
         self.relightPSO    = try computePipeline("relight")
         self.ambientOcclusionPSO = try computePipeline("compute_ao")
+        self.stabilizePSO = try computePipeline("stabilize_depth")
 
         // ML 파이프라인
         let mlLibrary = try device.makeLibrary(URL: packageURL)
@@ -181,6 +188,25 @@ nonisolated final class DepthPipeline {
             }
             return texture
         }
+        // 안정화 핑퐁 — 깊이 버퍼와 같은 레이아웃(행 패딩 포함)이어야 한다.
+        let stabilizedLength = outBuffer.length
+        for _ in 0..<2 {
+            guard let buffer = device.makeBuffer(length: stabilizedLength, options: .storageModeShared) else {
+                throw DepthPipelineError.resourceAllocationFailed
+            }
+            stabilizedBuffers.append(buffer)
+        }
+        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: Self.modelWidth, height: Self.modelHeight, mipmapped: false)
+        colorDescriptor.usage = [.shaderRead, .shaderWrite]
+        colorDescriptor.storageMode = .private
+        for _ in 0..<2 {
+            guard let texture = device.makeTexture(descriptor: colorDescriptor) else {
+                throw DepthPipelineError.resourceAllocationFailed
+            }
+            colorHistoryTextures.append(texture)
+        }
+
         self.positionTexture = try makeGBuffer(.rgba16Float)
         self.normalTexture   = try makeGBuffer(.rgba16Float)
         self.matteTexture    = try makeGBuffer(.r8Unorm)
@@ -204,6 +230,8 @@ nonisolated final class DepthPipeline {
         staticResidency.addAllocation(normalTexture)
         staticResidency.addAllocation(matteTexture)
         staticResidency.addAllocation(ambientOcclusionTexture)
+        for buffer in stabilizedBuffers { staticResidency.addAllocation(buffer) }
+        for texture in colorHistoryTextures { staticResidency.addAllocation(texture) }
         staticResidency.commit()
         staticResidency.requestResidency()
 
@@ -251,6 +279,13 @@ nonisolated final class DepthPipeline {
             uniforms = merged
         }
         uniforms.hasSegmentation = segmentation != nil ? 1 : 0
+        uniforms.historyValid = hasHistory ? 1 : 0
+
+        // 배경 기준 affine 정합. 사람이 움직여도 스케일이 고정된다.
+        if let fitted = fitAffineFromBackground() {
+            uniforms.affineA = fitted.a
+            uniforms.affineB = fitted.b
+        }
         uniformBuffer.contents().copyMemory(
             from: &uniforms, byteCount: MemoryLayout<SunUniforms>.stride)
 
@@ -295,9 +330,32 @@ nonisolated final class DepthPipeline {
             encoder.endEncoding()
         }
 
-        // [C1] 시각화 — 추론 결과 버퍼를 그대로 읽는다
+        // [C1] 안정화 — edge-stopping 시간필터로 플리커를 죽인다.
+        let writeBuffer = stabilizedBuffers[historyIndex]
+        let readBuffer = stabilizedBuffers[1 - historyIndex]
+        let colorWrite = colorHistoryTextures[historyIndex]
+        let colorRead = colorHistoryTextures[1 - historyIndex]
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             argumentTable.setAddress(depthBuffer.gpuAddress, index: 0)
+            argumentTable.setAddress(readBuffer.gpuAddress, index: 1)
+            argumentTable.setAddress(writeBuffer.gpuAddress, index: 2)
+            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 3)
+            argumentTable.setTexture(source.gpuResourceID, index: 0)
+            argumentTable.setTexture(colorRead.gpuResourceID, index: 1)
+            argumentTable.setTexture(colorWrite.gpuResourceID, index: 2)
+            encoder.setArgumentTable(argumentTable)
+            encoder.setComputePipelineState(stabilizePSO)
+            encoder.dispatchThreads(
+                threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
+                            visibilityOptions: .device)
+            encoder.endEncoding()
+        }
+
+        // [C2] 시각화 — 안정화된 깊이를 보여준다 (반드시 안정화 뒤에 인코딩)
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            argumentTable.setAddress(stabilizedBuffers[historyIndex].gpuAddress, index: 0)
             argumentTable.setAddress(uniformBuffer.gpuAddress, index: 1)
             argumentTable.setTexture(target.gpuResourceID, index: 0)
             encoder.setArgumentTable(argumentTable)
@@ -310,7 +368,7 @@ nonisolated final class DepthPipeline {
 
         // [C3] 지오메트리 — 역깊이 → 뷰공간 위치·5-tap 노멀·피사체 마스크
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            argumentTable.setAddress(depthBuffer.gpuAddress, index: 0)
+            argumentTable.setAddress(stabilizedBuffers[historyIndex].gpuAddress, index: 0)
             argumentTable.setAddress(uniformBuffer.gpuAddress, index: 1)
             argumentTable.setTexture(source.gpuResourceID, index: 0)
             argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
@@ -370,6 +428,12 @@ nonisolated final class DepthPipeline {
         queue.signalEvent(event, value: signalValue)
         guard event.wait(untilSignaledValue: signalValue, timeoutMS: 2000) else { return nil }
 
+        measureFlicker(buffer: stabilizedBuffers[historyIndex])
+
+        // 이번 프레임 출력이 다음 프레임의 히스토리가 된다.
+        historyIndex = 1 - historyIndex
+        hasHistory = true
+
         return (depth: target, relit: relitTarget)
     }
 
@@ -395,6 +459,115 @@ nonisolated final class DepthPipeline {
 
         CGImageDestinationAddImage(destination, image, nil)
         return CGImageDestinationFinalize(destination)
+    }
+
+    // MARK: 안정성 측정
+
+    /// 직전 프레임의 안정화 깊이 스냅샷(서브샘플). 플리커 측정용.
+    private var flickerProbe: [Float] = []
+    /// 연속 프레임 간 깊이 변화의 중앙값. 낮을수록 안정적이다.
+    private(set) var flickerMetric: Float = 0
+
+    /// 안정화가 실제로 효과가 있는지 수치로 본다.
+    /// 눈으로는 "덜 떨리는 것 같다"밖에 말할 수 없다.
+    private func measureFlicker(buffer: MTLBuffer) {
+        guard buffer.storageMode == .shared else { return }
+        let pointer = buffer.contents().bindMemory(
+            to: Float.self, capacity: buffer.length / MemoryLayout<Float>.size)
+
+        var current: [Float] = []
+        current.reserveCapacity(900)
+        var y = 0
+        while y < Self.modelHeight {
+            var x = 0
+            while x < Self.modelWidth {
+                current.append(pointer[y * rowStride + x])
+                x += 16
+            }
+            y += 16
+        }
+
+        if flickerProbe.count == current.count {
+            var deltas = zip(current, flickerProbe).map { abs($0 - $1) }
+            deltas.sort()
+            let median = deltas[deltas.count / 2]
+            // EMA로 부드럽게 — 단일 프레임 값은 노이즈가 크다.
+            flickerMetric = flickerMetric == 0 ? median : flickerMetric * 0.9 + median * 0.1
+        }
+        flickerProbe = current
+    }
+
+    // MARK: affine 정합
+
+    /// 기준 프레임의 배경 통계. 아주 느리게 갱신해 앵커 역할을 한다.
+    private var referenceMedian: Float = 0
+    private var referenceScale: Float = 0
+
+    /// 배경만으로 robust affine fit.
+    ///
+    /// 상대 역깊이라 프레임마다 스케일과 오프셋이 흔들린다.
+    /// 3D에 고정한 광원 기준으로 보면 씬 전체가 앞뒤로 펌핑한다.
+    /// **사람은 움직여도 배경은 안 움직이므로**, 배경 픽셀만으로 기준에 맞추면
+    /// 스케일이 고정된다. 중앙값·MAD 기반이라 RANSAC이 필요 없다.
+    ///
+    /// 배경 판정은 깊이 자체로 한다 — 상대 역깊이에서 작은 값이 먼 것이다.
+    /// (세그멘테이션 매트는 GPU 텍스처라 여기서 읽을 수 없다)
+    private func fitAffineFromBackground() -> (a: Float, b: Float)? {
+        guard depthBuffer.storageMode == .shared else { return nil }
+        let pointer = depthBuffer.contents().bindMemory(
+            to: Float.self, capacity: depthBuffer.length / MemoryLayout<Float>.size)
+
+        // 16픽셀 간격 서브샘플이면 약 800개 — 통계에 충분하고 비용은 무시할 만하다.
+        var samples: [Float] = []
+        samples.reserveCapacity(900)
+        var y = 0
+        while y < Self.modelHeight {
+            var x = 0
+            while x < Self.modelWidth {
+                samples.append(pointer[y * rowStride + x])
+                x += 16
+            }
+            y += 16
+        }
+        guard samples.count > 64 else { return nil }
+
+        samples.sort()
+        // 하위 45%를 배경으로 본다. 웹캠 상반신이면 사람이 화면의 절반을 넘지 않는다.
+        let backgroundCount = max(samples.count * 45 / 100, 16)
+        let background = Array(samples[0..<backgroundCount])
+
+        let median = background[background.count / 2]
+        var deviations = background.map { abs($0 - median) }
+        deviations.sort()
+        let scale = max(deviations[deviations.count / 2], 1e-4)
+
+        if referenceScale <= 0 {
+            referenceMedian = median
+            referenceScale = scale
+            return nil            // 첫 프레임은 기준만 세우고 보정하지 않는다
+        }
+
+        // current → reference 로 맞추는 선형 변환.
+        let a = referenceScale / scale
+        let b = referenceMedian - a * median
+
+        // 기준은 아주 느리게 따라간다. 빠르면 앵커 역할을 못 하고 같이 흘러간다.
+        let rate: Float = 0.02
+        referenceMedian += (median - referenceMedian) * rate
+        referenceScale += (scale - referenceScale) * rate
+
+        // 정합 계수를 미터 변환 계수와 합성한다.
+        //   d' = a·d + b  를 거친 뒤  z = 1/(A·d' + B)  이므로
+        //   z = 1/(A·a·d + A·b + B)
+        let baseA = SunUniforms().affineA
+        let baseB = SunUniforms().affineB
+        let combinedA = baseA * a
+        let combinedB = baseA * b + baseB
+
+        // 폭주 방지 — 정합이 튀면 조명이 순간이동한다.
+        guard combinedA.isFinite, combinedB.isFinite,
+              combinedA > baseA * 0.5, combinedA < baseA * 2.0 else { return nil }
+        return (combinedA, combinedB)
     }
 
     // MARK: 깊이 샘플링

@@ -104,8 +104,10 @@ final class RelightEngine {
                 self.start()
                 // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
                 // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
+                // 안정화 A/B — 앞 5회는 off, 뒤 5회는 on. 플리커 지표로 효과를 잰다.
                 let offsets: [Float] = [-0.3, 0.0, 0.4, 0.9, -0.15]
                 for i in 0..<10 {
+                    self.lightRig.temporalBlend = i < 5 ? 0.0 : 0.85
                     try? await Task.sleep(for: .seconds(3))
                     self.lightRig.depthOffset = offsets[i % offsets.count]
                     // 광원을 원 궤도로 돌려 조명이 실제로 화면을 바꾸는지 확인한다.
@@ -114,13 +116,15 @@ final class RelightEngine {
                                                               0.5 + 0.3 * sin(angle)))
                     let (camera, depth, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 플리커=%.5f 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        self.lightRig.temporalBlend > 0 ? "ON " : "OFF",
                         String(describing: self.status), self.stats.captureFPS,
                         self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
                         camera == nil ? "nil" : "OK",
                         depth == nil ? "nil" : "OK",
                         relit == nil ? "nil" : "OK",
                         self.personMatte?.latestTexture() == nil ? "nil" : "OK",
+                        self.depthPipeline?.flickerMetric ?? 0,
                         self.isHandVisible ? "보임" : "없음",
                         self.pinch.isPinching ? "잡음" : "놓음",
                         self.pinch.normalizedDepth,

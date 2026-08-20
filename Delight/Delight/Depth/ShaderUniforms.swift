@@ -49,6 +49,12 @@ struct SunUniforms {
     var enableSpecular: UInt32 = 1
     var hasSegmentation: UInt32 = 0
 
+    // 깊이 안정화.
+    var historyValid: UInt32 = 0
+    var temporalBlend: Float = 0.85
+    var colorSigma: Float = 0.012
+    var depthSigma: Float = 0.05
+
     var lightCount: UInt32 = 1
     var lights: (SunLight, SunLight, SunLight, SunLight) = (SunLight(), SunLight(), SunLight(), SunLight())
 }

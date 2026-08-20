@@ -78,6 +78,13 @@ final class LightRig {
     var translucency: Float = 0.6
     var detailStrength: Float = 0.4
 
+    // MARK: 깊이 안정화
+    /// 히스토리 비중. 0이면 안정화 off — A/B 비교에 그대로 쓴다.
+    var temporalBlend: Float = 0.85
+    /// 색 변화 허용폭. 크면 고스팅, 작으면 떨림이 남는다.
+    var colorSigma: Float = 0.012
+    var depthSigma: Float = 0.05
+
     /// 광원이 손끝보다 얼마나 카메라 쪽에 놓이는가(미터).
     /// 0이면 손 안에 파묻혀 보이지 않는다. 항상 손 앞에 떠 있어야 "잡았다"가 성립한다.
     static let handLeadDistance: Float = 0.07
@@ -204,6 +211,9 @@ final class LightRig {
         uniforms.rimPower = rimPower
         uniforms.translucency = translucency
         uniforms.subjectDepth = subjectDepth
+        uniforms.temporalBlend = temporalBlend
+        uniforms.colorSigma = colorSigma
+        uniforms.depthSigma = depthSigma
         uniforms.enableAO = ambientOcclusionEnabled ? 1 : 0
         uniforms.enableSpecular = specularEnabled ? 1 : 0
 
