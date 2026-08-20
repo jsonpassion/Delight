@@ -52,49 +52,30 @@ kernel void blit_source(texture2d<float, access::sample> source [[texture(0)]],
     output.write(float4(source.sample(linearSampler, uv).rgb, 1.0), gid);
 }
 
-/// 카메라와 깊이맵을 좌우로 나눠 드로어블에 합성한다. P1의 눈에 보이는 성과.
-/// splitFraction 0 → 카메라만, 1 → 깊이만.
-kernel void composite_split(texture2d<float, access::sample> camera [[texture(0)]],
-                            texture2d<float, access::sample> depth  [[texture(1)]],
-                            texture2d<float, access::write>  output [[texture(2)]],
-                            constant float                  &splitFraction [[buffer(0)]],
-                            constant uint                   &mirrored      [[buffer(1)]],
-                            uint2 gid [[thread_position_in_grid]])
+/// 재조명 결과를 창에 그린다. 거울상으로 뒤집고 aspect-fill로 채운다.
+///
+/// 거울은 **프리뷰 전용**이다. 사용자는 거울에 익숙하지만
+/// 상대가 보는 영상은 비반전이 정석이라 SyphonSink는 원본을 그대로 내보낸다.
+kernel void present_mirrored(texture2d<float, access::sample> source [[texture(0)]],
+                             texture2d<float, access::write>  output [[texture(1)]],
+                             uint2 gid [[thread_position_in_grid]])
 {
     const uint W = output.get_width(), H = output.get_height();
     if (gid.x >= W || gid.y >= H) { return; }
 
     constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
-    const float split = float(W) * splitFraction;
 
-    // 2px 구분선
-    if (splitFraction > 0.001 && splitFraction < 0.999 &&
-        abs(float(gid.x) - split) < 1.0) {
-        output.write(float4(0.08, 0.09, 0.11, 1.0), gid);
-        return;
-    }
+    float paneAspect = float(W) / float(H);
+    float texAspect = float(source.get_width()) / float(source.get_height());
+    float2 uv = (float2(gid) + 0.5) / float2(W, H);
 
-    const bool isDepthSide = float(gid.x) > split;
-    texture2d<float, access::sample> chosen = isDepthSide ? depth : camera;
-
-    // 각 반쪽 안에서 aspect-fill 로 채운다 — 레터박스 없이 꽉 찬 화면이 데모에 낫다.
-    const float halfWidth = isDepthSide ? (float(W) - split) : split;
-    const float localX = isDepthSide ? (float(gid.x) - split) : float(gid.x);
-
-    const float paneAspect = halfWidth / float(H);
-    const float texAspect = float(chosen.get_width()) / float(chosen.get_height());
-
-    float2 uv = float2((localX + 0.5) / halfWidth, (float(gid.y) + 0.5) / float(H));
+    // 레터박스 없이 꽉 채운다 — 검은 띠는 데모에서 손해다.
     if (texAspect > paneAspect) {
-        const float scale = paneAspect / texAspect;
-        uv.x = (uv.x - 0.5) * scale + 0.5;
+        uv.x = (uv.x - 0.5) * (paneAspect / texAspect) + 0.5;
     } else {
-        const float scale = texAspect / paneAspect;
-        uv.y = (uv.y - 0.5) * scale + 0.5;
+        uv.y = (uv.y - 0.5) * (texAspect / paneAspect) + 0.5;
     }
 
-    // 거울상 프리뷰 — 사용자는 거울에 익숙하다. 손 왼쪽 = 화면 왼쪽.
-    // 송출(Syphon/CMIO)은 비반전이 정석이므로 프리뷰에서만 뒤집는다.
-    if (mirrored != 0) { uv.x = 1.0 - uv.x; }
-    output.write(float4(chosen.sample(linearSampler, uv).rgb, 1.0), gid);
+    uv.x = 1.0 - uv.x;
+    output.write(float4(source.sample(linearSampler, uv).rgb, 1.0), gid);
 }

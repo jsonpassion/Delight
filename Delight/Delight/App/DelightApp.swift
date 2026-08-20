@@ -33,9 +33,5 @@ struct DelightApp: App {
             CommandGroup(replacing: .newItem) { }
         }
 
-        Settings {
-            SettingsView()
-                .environment(engine)
-        }
     }
 }

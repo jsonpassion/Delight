@@ -23,6 +23,15 @@ constant float kPI = 3.14159265359;
 /// 피부의 수직 입사 반사율.
 constant float kSkinF0 = 0.028;
 
+/// GGX 정규분포. 이중 로브를 만들려고 따로 뺐다.
+inline float ggxDistribution(float NdotH, float roughness)
+{
+    float a = max(roughness * roughness, 1e-3);
+    float a2 = a * a;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(kPI * d * d, 1e-6);
+}
+
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 /// 카메라 텍스처는 sRGB로 인코딩되어 있다. 조명은 **선형 공간에서** 더해야 한다.
@@ -203,22 +212,43 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
         // --- 스펙큘러: 정면광일 때만 의미가 있다.
         float3 specular = float3(0.0);
         if (u.enableSpecular && raw > 0.0) {
-            float3 H = normalize(L + viewDirection);
+            // ── 구 면광원 근사 (Karis, representative point) ──
+            // 점광원으로 계산하면 하이라이트가 수학적인 점이 되어 피부에 흰 dot이 박힌다.
+            // 실제 조명은 면적을 가지므로, 반사 벡터에서 광원 구에 가장 가까운 점을
+            // 대표점으로 삼고 거칠기를 광원 크기만큼 넓힌다.
+            float3 reflectDir = reflect(-viewDirection, normal);
+            float3 centerToRay = dot(toLight, reflectDir) * reflectDir - toLight;
+            float3 closestPoint = toLight
+                + centerToRay * saturate(light.radius / max(length(centerToRay), 1e-4));
+            float3 specL = normalize(closestPoint);
+
+            float3 H = normalize(specL + viewDirection);
             float NdotH = saturate(dot(normal, H));
             float VdotH = saturate(dot(viewDirection, H));
             float NdotV = saturate(dot(normal, viewDirection));
-            float NdotL = saturate(raw);
+            float NdotL = saturate(dot(normal, specL));
 
-            float a = max(u.skinRoughness * u.skinRoughness, 1e-3);
-            float a2 = a * a;
-            float denominator = NdotH * NdotH * (a2 - 1.0) + 1.0;
-            float D = a2 / max(kPI * denominator * denominator, 1e-6);
+            // 광원이 크고 멀수록 로브가 넓어진다. 이 항이 없으면 반경을 키워도
+            // 하이라이트 크기가 그대로라 여전히 점으로 보인다.
+            float baseRoughness = max(u.skinRoughness, 0.08);
+            float sphereWiden = saturate(light.radius / (2.0 * max(distance, 1e-3)));
+            float roughness = saturate(baseRoughness + sphereWiden);
+
+            // ── 이중 로브 ──
+            // 피부는 얇은 기름막(좁고 밝음)과 그 아래 층(넓고 흐림)이 겹쳐 반사한다.
+            // 단일 로브는 유리처럼 보인다.
+            float energy = 1.0 / (1.0 + sphereWiden * 4.0);   // 넓어진 만큼 어두워져야 한다
+            float D = mix(ggxDistribution(NdotH, roughness * 1.6),
+                          ggxDistribution(NdotH, roughness * 0.7), 0.35);
+
             float F = kSkinF0 + (1.0 - kSkinF0) * pow(1.0 - VdotH, 5.0);
+            float a = roughness * roughness;
             float k = a / 2.0;
-            float G = (NdotL / (NdotL * (1.0 - k) + k)) * (NdotV / (NdotV * (1.0 - k) + k));
+            float G = (NdotL / max(NdotL * (1.0 - k) + k, 1e-4))
+                    * (NdotV / max(NdotV * (1.0 - k) + k, 1e-4));
 
             // 피부에만 얹는다. 옷이나 배경에 뜨면 즉시 가짜티가 난다.
-            specular = float3(D * F * G) * matte * attenuation;
+            specular = float3(D * F * G) * energy * matte * attenuation;
         }
 
         accumulated += (diffuse + specular) * light.color * light.intensity * shadow;

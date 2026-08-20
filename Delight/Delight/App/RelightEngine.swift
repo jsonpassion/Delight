@@ -27,34 +27,11 @@ final class RelightEngine {
     }
 
     private(set) var status: Status = .idle
-    private(set) var stats = FrameStats()
+    @ObservationIgnored let frameStats = FrameStats()
+    @ObservationIgnored let lightingStore = LightingStore()
 
     /// 씬에 놓인 광원들. 다중 광원 확장을 위해 처음부터 배열이다.
     var lightRig = LightRig()
-
-    /// 손 인식이 실패해도 데모가 죽지 않도록 하는 폴백. 항상 살려둔다.
-    var inputMode: InputMode = .mouse {
-        didSet {
-            guard inputMode != oldValue else { return }
-            // 손 모드로 바꾸면 핀치할 때까지 광원이 없다.
-            lightRig.isLit = (inputMode == .mouse)
-        }
-    }
-
-    enum InputMode: String, CaseIterable, Identifiable {
-        case hand = "손"
-        case mouse = "마우스"
-        var id: String { rawValue }
-    }
-
-    /// 깊이맵을 화면에 보여줄지. P1의 눈에 보이는 성과다.
-    var showDepth = true
-
-    /// 거울상 프리뷰. 손 인터랙션은 거울이 자연스럽다. 송출에는 적용하지 않는다.
-    var isMirrored = true
-
-    /// 재조명 결과를 보여줄지. 끄면 원본 카메라가 나와 전후 비교가 된다.
-    var showRelit = true
 
     /// Syphon 송출. 켜면 OBS의 Syphon Client 소스에 "Delight"가 나타난다.
     var isBroadcasting = false {
@@ -124,8 +101,6 @@ final class RelightEngine {
         // 3초마다 상태를 로그로 남긴다. CLI에서 파이프라인 전체를 검증할 때 쓴다.
         if ProcessInfo.processInfo.arguments.contains("--autostart") {
             Task { @MainActor in
-                // 손 경로까지 검증한다. 마우스만으로는 Vision·깊이샘플링이 안 돌아본다.
-                self.inputMode = .hand
                 self.start()
                 // 슬라이더 조작과 같은 경로로 depthOffset을 대입해 회귀를 잡는다.
                 // (@Observable + didSet 자기대입이 무한재귀로 크래시한 전례가 있다)
@@ -142,14 +117,13 @@ final class RelightEngine {
                     ProcessInfo.processInfo.arguments.contains("--stabilize-off") ? 0.0 : 0.85
                 for tick in 0..<10 {
                     try? await Task.sleep(for: .seconds(3))
-                    let (camera, depth, relit) = self.frameStore.latest()
+                    let (camera, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ depth=%@ relit=%@ 매트=%@ 송출=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ relit=%@ 매트=%@ 송출=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         self.lightRig.temporalBlend > 0 ? "ON " : "OFF",
-                        String(describing: self.status), self.stats.captureFPS,
-                        self.stats.depthMilliseconds, self.stats.depthFPS, self.stats.frameCount,
+                        String(describing: self.status), self.frameStats.captureFPS,
+                        self.frameStats.depthMilliseconds, self.frameStats.depthFPS, self.frameStats.frameCount,
                         camera == nil ? "nil" : "OK",
-                        depth == nil ? "nil" : "OK",
                         relit == nil ? "nil" : "OK",
                         self.personMatte?.latestTexture() == nil ? "nil" : "OK",
                         self.syphonSink.isActive ? "ON" : "off",
@@ -220,6 +194,8 @@ final class RelightEngine {
             let visionReady = OpenFlag()
             // --no-matte: 세그멘테이션 격리 실험용. 크래시 이등분에 쓴다.
             let sink = self.syphonSink!
+            let lightingStore = self.lightingStore
+            let stats = self.frameStats
             let matteProvider = ProcessInfo.processInfo.arguments.contains("--no-matte")
                 ? nil : PersonMatte(device: device)
             self.personMatte = matteProvider
@@ -229,7 +205,7 @@ final class RelightEngine {
 
             capture.onFrame = { [weak self] frame in
                 store.publishCamera(frame)
-                Task { @MainActor in self?.stats.recordCapture(at: frame.presentationTime) }
+                stats.recordCapture(at: frame.presentationTime)
 
                 // 추론이 아직 돌고 있으면 이 프레임은 버린다.
                 guard gate.tryEnter() else { return }
@@ -246,8 +222,7 @@ final class RelightEngine {
                 // 손 추적 — 깊이 추론과 병렬로 돈다.
                 if visionReady.isOpen, handGate.tryEnter() {
                     Task { @MainActor [weak self] in
-                        guard let self, self.inputMode == .hand,
-                              let tracker = self.handTracker else {
+                        guard let self, let tracker = self.handTracker else {
                             handGate.leave(); return
                         }
                         let result = await tracker.process(pixelBuffer: frame.pixelBuffer) { point in
@@ -271,27 +246,26 @@ final class RelightEngine {
                     }
                 }
 
-                // 광원 상태는 메인 액터가 소유하므로 값 타입 스냅샷으로 건넨다.
-                Task { @MainActor in
-                    let lighting = self?.currentLighting()
-                    let matteTexture = self?.personMatte?.latestTexture()
-                    queue.async {
-                        let start = CACurrentMediaTime()
-                        let result = pipeline.process(source: frame.texture,
-                                                      lighting: lighting,
-                                                      segmentation: matteTexture)
-                        let elapsed = (CACurrentMediaTime() - start) * 1000
-                        if let result {
-                            store.publishResult(depth: result.depth, relit: result.relit)
-                            // 송출은 거울상을 적용하지 않는다 — 프리뷰 전용이다.
-                            sink.submit(result.relit, pts: frame.presentationTime)
-                        }
-                        gate.leave()
-                        Task { @MainActor in self?.stats.recordDepth(milliseconds: elapsed) }
+                // 조명·매트는 모두 락으로 보호된 저장소에서 읽는다.
+                // 메인 액터를 거치지 않으므로 SwiftUI와 경쟁하지 않는다.
+                let lighting = lightingStore.load()
+                let matteTexture = matteProvider?.latestTexture()
+                queue.async {
+                    let start = CACurrentMediaTime()
+                    let relit = pipeline.process(source: frame.texture,
+                                                 lighting: lighting,
+                                                 segmentation: matteTexture)
+                    stats.recordDepth(milliseconds: (CACurrentMediaTime() - start) * 1000)
+                    if let relit {
+                        store.publishResult(relit: relit)
+                        // 송출은 거울상을 적용하지 않는다 — 프리뷰 전용이다.
+                        sink.submit(relit, pts: frame.presentationTime)
                     }
+                    gate.leave()
                 }
             }
             self.capture = capture
+            publishLighting()
             let tracker = HandTracker()
             self.handTracker = tracker
 
@@ -334,13 +308,14 @@ final class RelightEngine {
     }
 
     /// 현재 조명 상태를 셰이더 유니폼 스냅샷으로 만든다.
-    func currentLighting() -> SunUniforms {
+    /// 조명이 바뀌면 캡처 스레드가 읽을 스냅샷을 갱신한다.
+    func publishLighting() {
         var uniforms = SunUniforms()
         lightRig.fill(&uniforms)
         // 초점거리는 출력 해상도와 짝이어야 한다. 빠뜨리면 기본값이 들어가 원근이 틀어진다.
         uniforms.fx = calibration.fx
         uniforms.fy = calibration.fy
-        return uniforms
+        lightingStore.store(uniforms)
     }
 
     /// 핀치 상태를 광원에 반영한다.
@@ -355,6 +330,7 @@ final class RelightEngine {
             // 손을 놓은 뒤 광원이 손등 뒤나 얼굴 속에 남아 있는 상태 자체를 없앤다.
             lightRig.releaseGrab()
             lightRig.isLit = false
+            publishLighting()
             return
         }
         lightRig.isLit = true
@@ -378,6 +354,7 @@ final class RelightEngine {
                        pixelSize: outputSize,
                        affine: SIMD2<Float>(SunUniforms().affineA, SunUniforms().affineB),
                        isGrabbing: isGrabbing)
+        publishLighting()
     }
 
     /// 리라이팅 출력 해상도를 카메라 해상도에 맞춘다.
@@ -408,19 +385,31 @@ final class RelightEngine {
 nonisolated final class FrameStore: @unchecked Sendable {
     private let lock = NSLock()
     private var camera: CameraFrame?
-    private var depth: MTLTexture?
     private var relit: MTLTexture?
 
     func publishCamera(_ frame: CameraFrame) {
         lock.lock(); camera = frame; lock.unlock()
     }
-    func publishResult(depth: MTLTexture, relit: MTLTexture) {
-        lock.lock(); self.depth = depth; self.relit = relit; lock.unlock()
+    func publishResult(relit: MTLTexture) {
+        lock.lock(); self.relit = relit; lock.unlock()
     }
-    func latest() -> (camera: MTLTexture?, depth: MTLTexture?, relit: MTLTexture?) {
+    func latest() -> (camera: MTLTexture?, relit: MTLTexture?) {
         lock.lock(); defer { lock.unlock() }
-        return (camera?.texture, depth, relit)
+        return (camera?.texture, relit)
     }
+}
+
+/// 메인 액터가 쓰고 캡처 스레드가 읽는 조명 스냅샷.
+///
+/// 매 프레임 `Task { @MainActor }`로 조명을 가져오면 초당 수십 개의 태스크가
+/// SwiftUI 트랜잭션과 경쟁해 참조카운트가 깨진다(크래시: RefCounts::incrementSlow).
+/// 조명은 사용자가 움직일 때만 바뀌므로, 바뀔 때 밀어넣고 캡처 쪽은 락으로 읽는다.
+nonisolated final class LightingStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var uniforms = SunUniforms()
+
+    func store(_ value: SunUniforms) { lock.lock(); uniforms = value; lock.unlock() }
+    func load() -> SunUniforms { lock.lock(); defer { lock.unlock() }; return uniforms }
 }
 
 /// 한 번 열리면 계속 열려 있는 플래그.
@@ -458,32 +447,41 @@ nonisolated final class InFlightGate: @unchecked Sendable {
     }
 }
 
-/// 프레임 타이밍 통계. HUD에 그대로 표시한다.
-struct FrameStats {
-    private(set) var captureFPS: Double = 0
-    private(set) var depthMilliseconds: Double = 0
-    private(set) var depthFPS: Double = 0
-    private(set) var frameCount: Int = 0
+/// 프레임 타이밍 통계. 진단 전용이므로 관찰 대상이 아니다 —
+/// 초당 30번 바뀌는 값을 @Observable로 두면 SwiftUI가 그만큼 레이아웃을 다시 한다.
+nonisolated final class FrameStats: @unchecked Sendable {
+    private let lock = NSLock()
 
+    private var _captureFPS: Double = 0
+    private var _depthMilliseconds: Double = 0
+    private var _depthFPS: Double = 0
+    private var _frameCount: Int = 0
     private var lastCapture: CMTime = .zero
     private var smoothedInterval: Double = 0
 
-    mutating func recordCapture(at time: CMTime) {
-        frameCount += 1
+    var captureFPS: Double { lock.lock(); defer { lock.unlock() }; return _captureFPS }
+    var depthMilliseconds: Double { lock.lock(); defer { lock.unlock() }; return _depthMilliseconds }
+    var depthFPS: Double { lock.lock(); defer { lock.unlock() }; return _depthFPS }
+    var frameCount: Int { lock.lock(); defer { lock.unlock() }; return _frameCount }
+
+    func recordCapture(at time: CMTime) {
+        lock.lock(); defer { lock.unlock() }
+        _frameCount += 1
         if lastCapture != .zero {
             let dt = (time - lastCapture).seconds
             if dt > 0 {
                 smoothedInterval = smoothedInterval == 0 ? dt : smoothedInterval * 0.9 + dt * 0.1
-                captureFPS = 1.0 / smoothedInterval
+                _captureFPS = 1.0 / smoothedInterval
             }
         }
         lastCapture = time
     }
 
-    mutating func recordDepth(milliseconds: Double) {
-        depthMilliseconds = depthMilliseconds == 0
+    func recordDepth(milliseconds: Double) {
+        lock.lock(); defer { lock.unlock() }
+        _depthMilliseconds = _depthMilliseconds == 0
             ? milliseconds
-            : depthMilliseconds * 0.85 + milliseconds * 0.15
-        depthFPS = 1000.0 / max(depthMilliseconds, 0.001)
+            : _depthMilliseconds * 0.85 + milliseconds * 0.15
+        _depthFPS = 1000.0 / max(_depthMilliseconds, 0.001)
     }
 }

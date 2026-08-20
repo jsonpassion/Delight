@@ -1,150 +1,98 @@
 //
 //  ContentView.swift
+//  화면은 하나다 — 영상과, 지금 무슨 일이 일어나는지 알려주는 한 줄.
+//
+//  조작 버튼을 두지 않는 이유: 이 앱이 하는 일은 하나다.
+//  카메라를 켜고, 핀치로 조명을 옮기고, 그 결과를 내보낸다.
+//  파라미터 슬라이더는 개발 중에 필요했지만 쓰는 사람에게는 선택지가 아니라 부담이다.
 //
 
 import SwiftUI
 
 struct ContentView: View {
     @Environment(RelightEngine.self) private var engine
-    @State private var splitFraction: Float = 0.5
     @State private var previewSize: CGSize = .zero
 
     var body: some View {
-        @Bindable var engine = engine
+        ZStack(alignment: .bottom) {
+            Color.black
+            MetalPreviewView(engine: engine)
 
-        HSplitView {
-            ZStack(alignment: .bottom) {
-                Color.black
-                MetalPreviewView(engine: engine, splitFraction: splitFraction)
-
-                if case .idle = engine.status { startOverlay }
-                if case .failed(let message) = engine.status { errorOverlay(message) }
-
-                if engine.status == .running {
-                    VStack(spacing: 10) {
-                        if engine.inputMode == .hand { pinchIndicator }
-                        if engine.showDepth { splitControl }
-                    }
-                }
-            }
-            .frame(minWidth: 640)
-            // 크기는 레이아웃에 관여하지 않고 읽는다.
-            // GeometryReader로 NSViewRepresentable을 감싸면 크기 협상이 재귀해 크래시한다.
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { previewSize = $0 }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in moveLight(to: value.location, in: previewSize) }
-            )
-
-            ControlPanel()
-                .frame(minWidth: 280, idealWidth: 300, maxWidth: 380)
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Toggle("송출", systemImage: "dot.radiowaves.left.and.right", isOn: $engine.isBroadcasting)
-                    .help("Syphon으로 내보냅니다. OBS의 Syphon Client 소스에서 \"Delight\"를 선택하세요.")
-                    .disabled(engine.status != .running)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Toggle("반전", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right",
-                       isOn: $engine.isMirrored)
-                    .help("거울상 프리뷰입니다. 송출 영상에는 적용되지 않습니다.")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Toggle("깊이", systemImage: "square.righthalf.filled", isOn: $engine.showDepth)
-                    .help("카메라 옆에 실시간 깊이맵을 보여줍니다.")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Picker("입력", selection: $engine.inputMode) {
-                    ForEach(RelightEngine.InputMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .help("손 인식이 불안정하면 마우스로 전환하세요.")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button(engine.status == .running ? "정지" : "시작") {
-                    engine.status == .running ? engine.stop() : engine.start()
-                }
+            switch engine.status {
+            case .idle:              startOverlay
+            case .failed(let text):  errorOverlay(text)
+            case .running:           statusPill
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { previewSize = $0 }
+        .contentShape(Rectangle())
+        .gesture(
+            // 손이 안 잡히는 상황에서도 데모가 죽지 않게 하는 유일한 장치.
+            DragGesture(minimumDistance: 0)
+                .onChanged { moveLight(to: $0.location, in: previewSize) }
+        )
+        .ignoresSafeArea()
     }
 
-    /// 핀치 상태 피드백. 손을 놓쳤는지, 잡았는지, 얼마나 깊은지 한눈에 보인다.
-    private var pinchIndicator: some View {
-        let pinch = engine.pinch
-        let tracking = engine.isHandVisible
-        return HStack(spacing: 10) {
-            Image(systemName: pinch.isPinching ? "hand.pinch.fill" : "hand.raised")
-                .foregroundStyle(pinch.isPinching ? .orange : (tracking ? .primary : .secondary))
-            Text(pinch.isPinching ? "조명을 잡았습니다"
-                                  : (tracking ? "핀치하면 조명을 잡습니다" : "손이 보이지 않습니다"))
-                .font(.caption)
-            if pinch.isPinching {
-                Divider().frame(height: 12)
-                Text(engine.lightRig.isBehindSubject
-                     ? String(format: "역광 %.0f%%", engine.lightRig.backlightAmount * 100)
-                     : "정면광")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-    }
-
-    /// 뷰 좌표 → 프리뷰 정규화 좌표.
-    /// 두 가지를 보정해야 손이 조명을 따라온다.
-    ///  1) 좌우 분할 — 왼쪽(카메라) 패널 안에서의 상대 위치로 환산
-    ///  2) 거울상 — 프리뷰가 반전이면 x를 뒤집는다
-    /// 이 보정을 빠뜨리면 조명이 손 반대쪽으로 간다. 반드시 한 곳에서만 한다.
-    private func moveLight(to point: CGPoint, in size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
-        // 손 모드에서도 드래그는 항상 먹는다. 데모 중 손 인식이 실패해도 죽지 않는 유일한 장치다.
-
-        let split = (engine.showDepth && splitFraction > 0.001) ? CGFloat(splitFraction) : 1.0
-        let paneWidth = max(size.width * split, 1)
-
-        var x = Float(min(max(point.x / paneWidth, 0), 1))
-        let y = Float(min(max(point.y / size.height, 0), 1))
-        if engine.isMirrored { x = 1 - x }
-
-        engine.moveLight(toNormalized: SIMD2<Float>(x, y))
-    }
-
-    private var splitControl: some View {
-        HStack(spacing: 10) {
-            Text("카메라").font(.caption2)
-            Slider(value: $splitFraction, in: 0...1).frame(width: 180)
-            Text("깊이").font(.caption2)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .padding(.bottom, 16)
-    }
+    // MARK: 오버레이
 
     private var startOverlay: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "sun.max").font(.system(size: 44, weight: .light))
-            Text("카메라를 시작하세요").font(.title3)
-            Text("핀치로 조명을 잡아 옮길 수 있습니다.")
+        VStack(spacing: 14) {
+            Image(systemName: "sun.max").font(.system(size: 46, weight: .ultraLight))
+            Text("Delight").font(.title2.weight(.medium))
+            Text("엄지와 검지를 붙이면 조명을 잡습니다")
                 .font(.callout).foregroundStyle(.secondary)
             Button("시작") { engine.start() }
                 .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
+                .controlSize(.large)
+                .padding(.top, 6)
         }
         .foregroundStyle(.white)
     }
 
     private func errorOverlay(_ message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle").font(.system(size: 34, weight: .light))
             Text(message).multilineTextAlignment(.center).frame(maxWidth: 420)
             Button("다시 시도") { engine.start() }
         }
         .foregroundStyle(.white)
         .padding()
+    }
+
+    /// 상태 한 줄. 지금 조명을 잡고 있는지, 어디로 나가는지만 보여준다.
+    private var statusPill: some View {
+        HStack(spacing: 12) {
+            Label(engine.pinch.isPinching ? "조명을 잡았습니다"
+                                          : (engine.isHandVisible ? "핀치하세요" : "손을 보여주세요"),
+                  systemImage: engine.pinch.isPinching ? "hand.pinch.fill" : "hand.raised")
+                .foregroundStyle(engine.pinch.isPinching ? .orange : .primary)
+
+            Divider().frame(height: 12)
+
+            Toggle(isOn: Binding(get: { engine.isBroadcasting },
+                                 set: { engine.isBroadcasting = $0 })) {
+                Label("송출", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .toggleStyle(.button)
+            .help("OBS의 Syphon Client에서 \"Delight\"를 선택하세요.")
+        }
+        .font(.callout)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.bottom, 22)
+    }
+
+    // MARK: 입력
+
+    /// 뷰 좌표 → 프리뷰 정규화 좌표.
+    /// 프리뷰가 거울상이므로 x를 뒤집는다. **핀치는 뒤집지 않는다** —
+    /// 핀치 좌표와 렌더링이 둘 다 원본 카메라 좌표계이고 프리뷰에서 함께 뒤집히기 때문이다.
+    private func moveLight(to point: CGPoint, in size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let x = 1 - Float(min(max(point.x / size.width, 0), 1))
+        let y = Float(min(max(point.y / size.height, 0), 1))
+        engine.moveLight(toNormalized: SIMD2<Float>(x, y))
     }
 }

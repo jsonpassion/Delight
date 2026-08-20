@@ -76,9 +76,39 @@ nonisolated final class HandTracker: @unchecked Sendable {
         if let depthSampler {
             let sample = depthSampler(midpoint)
             next.normalizedDepth = sample.depth
-            next.depthIsReliable = sample.reliable
+
+            // 핀치 지점이 손등이나 다른 손가락에 가려지면 Vision은 관절을 계속
+            // 추정해 주지만, 깊이맵은 **가린 쪽**을 읽는다. 그 상태로 광원을 옮기면
+            // 오브젝트 밖에 떠 보인다.
+            //
+            // 손은 한 덩어리다 — 손목·MCP 관절들과 깊이가 비슷해야 한다.
+            // 핀치 지점만 유독 다르면 그건 손이 아니라 앞을 가린 무언가다.
+            let anchors = Self.anchorDepths(hand, sampler: depthSampler)
+            next.depthIsReliable = sample.reliable && Self.agreesWithHand(sample.depth, anchors)
         }
         return next
+    }
+
+    /// 손바닥 쪽 관절들의 깊이. 이들은 서로 가리기 어려워 기준으로 삼을 만하다.
+    private static func anchorDepths(
+        _ hand: HumanHandPoseObservation,
+        sampler: (CGPoint) -> (depth: Float, reliable: Bool)) -> [Float] {
+        let joints = hand.allJoints()
+        let names: [HumanHandPoseObservation.JointName] = [.wrist, .indexMCP, .middleMCP, .ringMCP]
+        return names.compactMap { name in
+            guard let joint = joints[name], joint.confidence > 0.4 else { return nil }
+            return sampler(joint.location.verticallyFlipped().cgPoint).depth
+        }
+    }
+
+    /// 핀치 깊이가 손 전체와 어울리는가.
+    /// 손끝은 손바닥보다 카메라에 가깝거나 비슷하다 — 유독 멀면 무언가에 가려진 것이다.
+    private static func agreesWithHand(_ pinchDepth: Float, _ anchors: [Float]) -> Bool {
+        guard anchors.count >= 2 else { return true }   // 판단할 근거가 없으면 통과
+        let sorted = anchors.sorted()
+        let median = sorted[sorted.count / 2]
+        // 역깊이라 값이 클수록 가깝다. 손끝이 손바닥보다 크게 멀면(작으면) 가림이다.
+        return pinchDepth > median - 0.10
     }
 
     /// 손의 겉보기 크기. 1/Z에 비례한다.
