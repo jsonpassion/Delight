@@ -43,6 +43,18 @@ f32 518열이 528 elem이 된다. 셰이더는 `depthRowStride`로 인덱싱해�
 **macOS는 카메라 내부파라미터를 주지 않는다.** `videoFieldOfView`,
 `cameraIntrinsicMatrixDelivery` 모두 `API_UNAVAILABLE(macos)`. 얼굴 기반으로 추정한다.
 
+**CVMetalTextureCache는 반드시 flush해야 한다.** 매 프레임 텍스처를 만들면서
+`CVMetalTextureCacheFlush`를 빠뜨리면 IOSurface가 쌓여 WindowServer가 굶고,
+커널 watchdog이 **맥을 재부팅시킨다**(실제로 겪음: panic — no successful checkins
+from WindowServer in 120 seconds). 앱은 아무 신호도 주지 않는다.
+
+**Vision 인물 세그멘테이션은 기본 꺼져 있다** (`--matte`로 켠다).
+Espresso 모델 로드 레이스와 SwiftUI 크래시 스택에 반복해서 나타났다.
+깊이 기반 근사 매트로도 파이프라인은 성립한다.
+
+**@Observable 프로퍼티는 값이 바뀔 때만 쓴다.** 같은 값을 초당 30번 대입하면
+SwiftUI가 그만큼 레이아웃을 다시 하고 AttributeGraph에서 참조카운트 경쟁으로 터진다.
+
 **레이마칭 thickness가 가장 위험한 파라미터다.** 크면 화면이 검게 죽고, 작으면 그림자가 안 생긴다.
 
 **카메라 확장은 설치 조건이 따로 있다.** 빌드·임베드는 되지만 설치하려면

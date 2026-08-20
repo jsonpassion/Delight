@@ -63,6 +63,14 @@ final class RelightEngine {
     private let inFlight = InFlightGate()
     /// 손 추적은 깊이 추론과 독립적으로 흐른다. 서로 기다리게 하면 둘 다 느려진다.
     private let handInFlight = InFlightGate()
+    /// 메모리 감시 — 누수가 시스템을 죽이기 전에 스스로 멈춘다.
+    ///
+    /// 텍스처 캐시 flush를 빠뜨려 IOSurface가 쌓였고, WindowServer가 굶어
+    /// 커널 watchdog이 맥을 재부팅시킨 적이 있다. 그때 앱은 아무 신호도 주지 않았다.
+    /// 원인을 고쳤지만, 같은 부류의 누수가 다시 생겨도 시스템까지 끌고 가지는 않게 한다.
+    @ObservationIgnored private var memoryWatchdog: Timer?
+    private static let memoryLimitMB = 4_096.0
+
     /// 세그멘테이션도 마찬가지. 실루엣은 천천히 변하므로 15Hz로 충분하다.
     private let matteInFlight = InFlightGate()
     /// Vision 모델 첫 로드가 끝날 때까지 스트림 투입을 막는다.
@@ -119,12 +127,13 @@ final class RelightEngine {
                     try? await Task.sleep(for: .seconds(3))
                     let (camera, relit) = self.frameStore.latest()
                     let line = String(
-                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ relit=%@ 매트=%@ 송출=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
+                        format: "안정화=%@ status=%@ 캡처 %.1ffps 깊이 %.2fms(%.1ffps) 프레임 %d cam=%@ relit=%@ mem=%.0fMB 매트=%@ 송출=%@ 플리커=%.5f [enc %.1f gpu %.1f aff %.1f flk %.1f] 손=%@ 핀치=%@ d=%.2f z=%.2f",
                         self.lightRig.temporalBlend > 0 ? "ON " : "OFF",
                         String(describing: self.status), self.frameStats.captureFPS,
                         self.frameStats.depthMilliseconds, self.frameStats.depthFPS, self.frameStats.frameCount,
                         camera == nil ? "nil" : "OK",
                         relit == nil ? "nil" : "OK",
+                        Self.residentMemoryMB(),
                         self.personMatte?.latestTexture() == nil ? "nil" : "OK",
                         self.syphonSink.isActive ? "ON" : "off",
                         self.depthPipeline?.flickerMetric ?? 0,
@@ -231,7 +240,12 @@ final class RelightEngine {
                                 atNormalized: SIMD2<Float>(Float(point.x), Float(point.y)))
                                 ?? (depth: 0.5, reliable: false)
                         }
-                        self.isHandVisible = tracker.isHandVisible
+                        // @Observable 프로퍼티는 **값이 바뀔 때만** 쓴다.
+                        // 같은 값을 초당 30번 대입하면 SwiftUI가 그만큼 레이아웃을 다시 하고,
+                        // 그 부하가 AttributeGraph에서 참조카운트 경쟁으로 터진다.
+                        if self.isHandVisible != tracker.isHandVisible {
+                            self.isHandVisible = tracker.isHandVisible
+                        }
                         if let result {
                             self.applyPinch(result)
                         } else {
@@ -288,6 +302,7 @@ final class RelightEngine {
                 do {
                     try await capture.start()
                     self.status = .running
+                    self.startMemoryWatchdog()
                     NSLog("[Delight] 캡처 시작됨")
                 } catch {
                     self.status = .failed(error.localizedDescription)
@@ -300,7 +315,37 @@ final class RelightEngine {
         }
     }
 
+    /// 상주 메모리(MB). 누수 감시용.
+    private static func residentMemoryMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Double(info.phys_footprint) / 1_048_576
+    }
+
+    private func startMemoryWatchdog() {
+        memoryWatchdog?.invalidate()
+        memoryWatchdog = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let used = Self.residentMemoryMB()
+                guard used > Self.memoryLimitMB else { return }
+                NSLog("[Delight] 메모리 %.0fMB — 한계 초과로 캡처를 멈춥니다", used)
+                self.stop()
+                self.status = .failed(String(format:
+                    "메모리 사용량이 %.0fMB에 도달해 안전을 위해 멈췄습니다. 다시 시작할 수 있습니다.", used))
+            }
+        }
+    }
+
     func stop() {
+        memoryWatchdog?.invalidate()
+        memoryWatchdog = nil
         capture?.stop()
         capture = nil
         isBroadcasting = false
@@ -324,7 +369,12 @@ final class RelightEngine {
     /// 프리뷰에서 함께 뒤집히므로 사용자 눈에는 손과 조명이 같은 자리에 보인다.
     /// (마우스는 사용자가 이미 뒤집힌 화면을 보고 찍으므로 보정이 필요하다 — ContentView 참조)
     func applyPinch(_ pinch: PinchState) {
-        self.pinch = pinch
+        // 잡음/놓음이 바뀔 때만 관찰 프로퍼티를 건드린다. 위치는 매 프레임 바뀌지만
+        // 화면에 쓰이지 않으므로 SwiftUI를 깨울 이유가 없다.
+        if self.pinch.isPinching != pinch.isPinching {
+            self.pinch = pinch
+        }
+        let pinch = pinch
         guard pinch.isPinching else {
             // 핀치를 놓으면 광원도 즉시 사라진다.
             // 손을 놓은 뒤 광원이 손등 뒤나 얼굴 속에 남아 있는 상태 자체를 없앤다.
