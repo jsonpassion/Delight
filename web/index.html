@@ -145,7 +145,9 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
     </div>
     <p style="color:var(--muted);margin-top:1rem">앱이 실제로 쓰는 시간은 이와 별개입니다.
       카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서 깊이 처리 한 프레임이
-      <strong>17.8 ms</strong>입니다(구간: GPU 15.8~16.6 ms · CPU 나머지).</p>
+      <strong>23 ms</strong>입니다(구간: 인코딩 0.3 ms · GPU 20.6~22.8 ms).
+      직전까지 17.8 ms였고, 늘어난 시간은 피부 하이라이트를 점광원에서 구 면광원으로 바꾸며 치른 값입니다 —
+      30 fps 예산 33.3 ms 안입니다.</p>
   </div>
 </section>
 
