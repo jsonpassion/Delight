@@ -43,6 +43,12 @@ nonisolated final class PersonMatte: @unchecked Sendable {
         request.outputPixelFormat = kCVPixelFormatType_OneComponent8
     }
 
+    /// 첫 모델 로드를 스트림 밖에서 미리 끝낸다. 레이트 제한을 우회한다.
+    func warmUp(with pixelBuffer: CVPixelBuffer) {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+        _ = try? handler.perform([request])
+    }
+
     /// 한 프레임을 처리한다. 목표 주기(15Hz)는 여기서 스스로 지킨다 —
     /// 호출부가 메인 액터에서 시각을 재면 프레임마다 Task가 하나씩 더 생긴다.
     func process(pixelBuffer: CVPixelBuffer) {

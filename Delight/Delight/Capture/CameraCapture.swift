@@ -42,6 +42,18 @@ final class CameraCapture: NSObject {
     /// 프레임 콜백. 캡처 큐에서 호출된다 — 메인 액터가 아니다.
     var onFrame: (@Sendable (CameraFrame) -> Void)?
 
+    /// 캡처가 스스로 멈췄을 때(장치 분리, 런타임 에러) 불린다. 캡처 큐에서 호출된다.
+    ///
+    /// 왜 필요한가: 캡처 중 카메라가 사라지면(iPhone Continuity 분리 등)
+    /// CoreMediaIO의 확장 무효화 콜백이 죽은 장치를 계속 두드리다 프레임워크 내부에서
+    /// 세그폴트를 낸다(크래시 리포트: CMIODALExtensionDevice deviceHasBeenInvalidated).
+    /// 우리 코드 프레임이 아니라 100% 막을 수는 없지만, 분리를 감지하는 즉시
+    /// 세션을 내려 죽은 장치를 참조하는 시간을 최소화한다.
+    var onInterruption: (@Sendable (String) -> Void)?
+
+    private var observers: [NSObjectProtocol] = []
+    private let activeDevice: AVCaptureDevice
+
     private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "sunshine.capture", qos: .userInteractive)
@@ -50,14 +62,14 @@ final class CameraCapture: NSObject {
 
     init(device: MTLDevice, preferred: AVCaptureDevice? = nil) throws {
         self.device = device
+        guard let camera = preferred ?? Self.defaultCamera() else { throw CaptureError.noDevice }
+        self.activeDevice = camera
         super.init()
 
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess,
               let cache else { throw CaptureError.textureCacheFailed }
         self.textureCache = cache
-
-        guard let camera = preferred ?? Self.defaultCamera() else { throw CaptureError.noDevice }
 
         session.beginConfiguration()
         session.sessionPreset = .high
@@ -78,6 +90,34 @@ final class CameraCapture: NSObject {
         session.addOutput(output)
 
         session.commitConfiguration()
+
+        // 장치 분리·런타임 에러 감시. 알림은 임의 스레드로 오므로 캡처 큐로 넘긴다.
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let self,
+                  let device = notification.object as? AVCaptureDevice,
+                  device.uniqueID == self.activeDevice.uniqueID else { return }
+            self.queue.async {
+                if self.session.isRunning { self.session.stopRunning() }
+                self.onInterruption?("카메라가 분리되었습니다: \(device.localizedName)")
+            }
+        })
+        observers.append(center.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil
+        ) { [weak self] notification in
+            guard let self else { return }
+            let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            self.queue.async {
+                if self.session.isRunning { self.session.stopRunning() }
+                self.onInterruption?("캡처 런타임 에러: \(error?.localizedDescription ?? "알 수 없음")")
+            }
+        })
+    }
+
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
     /// 내장 → 외부 → Continuity 순으로 고른다.
