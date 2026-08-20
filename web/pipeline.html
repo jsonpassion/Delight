@@ -146,6 +146,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#quality">화질 해부</a></li>
     <li><a href="#occlusion-bug">깊이맵이 거짓말할 때</a></li>
     <li><a href="#stabilize">안정화: 떨림을 8배 줄이기</a></li>
+    <li><a href="#prediction">추측을 없앴다</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
     <li><a href="#crash-triage">크래시 한 증상, 원인 셋</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
@@ -153,6 +154,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#budget">성능 예산</a></li>
     <li><a href="#profiling">변동폭의 정체</a></li>
     <li><a href="#broadcast">Zoom까지 가는 길</a></li>
+    <li><a href="#extension">OBS 없이 Zoom으로</a></li>
     <li><a href="#repro">재현 절차</a></li>
   </ol>
 </nav>
@@ -672,6 +674,14 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
     두 신호의 강점이 정확히 상보적이다 — 깊이맵은 절대 거리를 알지만 가림에 약하고,
     손 크기는 절대 거리를 모르지만 가림에 강하다.</p>
 
+  <div class="call bad">
+    <span class="lbl">이후 뒤집혔다 — 이 결정은 지금 코드에 없다</span>
+    <p>위의 손 크기 외삽은 <strong>제거됐다.</strong> 가림에 강하다는 장점은 실재했지만,
+      손 크기는 거리만의 함수가 아니었다 — 손을 돌리거나 주먹을 쥐면 <strong>같은 거리에서도
+      크기가 크게 변해</strong> z가 틀렸다. 그 결과가 다시 "광원이 오브젝트 앞에 붙는" 증상이었다.
+      지금은 깊이맵만 쓴다. 무엇을 놓쳤는지는 <a href="#prediction">§06-5</a>에 적었다.</p>
+  </div>
+
   <h3>광원 수명 — 놓으면 사라진다</h3>
   <p>추적을 아무리 다듬어도 남는 증상이 있었다. 손을 놓으면 광원이 <strong>마지막 자리에 그대로 남는다.</strong>
     그 자리가 하필 손등 뒤나 얼굴 속이면 "왜 저기 박혀 있지"가 된다.
@@ -741,6 +751,70 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
     <p>안정화 ON 구간 후반에 깊이 처리 시간이 <strong>20.7 ms → 33.5 ms까지 변동</strong>했다.
       30 fps 예산(33.3 ms)의 경계다. 당시에는 세그멘테이션(15 Hz)과의 간섭으로 추정했고,
       그 추정은 <strong>틀렸다</strong>. 구간을 쪼개 재보니 콜드 스타트였다 — <a href="#profiling">§09-1</a>.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="prediction">
+  <h2><span class="num">06-5</span>추측을 없앴다</h2>
+  <p class="dek">광원이 오브젝트 앞에 붙어 고정되던 버그. 원인은 알고리즘이 아니라 <em>보이지 않는 것을 추측한 코드</em>였고, 그런 코드가 두 군데 있었다.</p>
+
+  <p>증상은 <a href="#occlusion-bug">§06-3</a>과 같은 문장이다. 핀치한 손을 오브젝트 뒤로 옮기면
+    광원이 오브젝트 <strong>앞</strong>에 붙어 고정된다 — 뒤로 보내려는 의도와 정확히 반대다.
+    같은 증상이 다시 나왔다는 것은 <strong>그때의 해법이 원인의 일부였다</strong>는 뜻이었다.</p>
+
+  <h3>추측 1 — 손 크기 외삽</h3>
+  <p><a href="#occlusion-bug">§06-3</a>에서 도입한 신호다. 손이 가려져도
+    wrist↔middleMCP 픽셀 거리로 z를 이어서 추정했다. "Vision이 손을 보는 한 유효하다"는 논리는
+    깔끔했고, 깊이맵(절대 거리를 알지만 가림에 약함)과 상보적이라는 그림도 매력적이었다.</p>
+  <p>놓친 것은 이것이다. <strong>손 크기는 거리만의 함수가 아니다.</strong>
+    손을 돌리거나 주먹을 쥐면 같은 거리에서도 wrist↔middleMCP 거리가 크게 변한다.
+    그러면 <code>referenceHandScale / handScale</code>이 그대로 z 오차가 된다.
+    가림에는 강했지만 <strong>자세에는 약한</strong> 신호였고, 핀치하는 손은 계속 자세가 바뀐다.</p>
+  <p><strong>제거했다. 이제 z는 깊이맵만 쓴다.</strong></p>
+
+  <h3>추측 2 — 손을 놓쳤을 때 마지막 핀치 상태 유지</h3>
+  <p>Vision이 손을 못 찾은 프레임에서 직전 핀치 상태를 유지하고 있었다.
+    깜빡임을 견디려는 코드였지만, 그 대가는 <strong>광원이 마지막 자리에 남는다</strong>는 것이다.
+    그 자리가 하필 오브젝트 앞이면 정확히 이 버그가 된다.</p>
+  <p><strong>손이 안 보이면 즉시 핀치를 놓는다.</strong></p>
+
+  <h3>가림 경계는 감지해서 손을 뗀다</h3>
+  <p>세 번째 경우가 남는다. 손과 그 뒤의 물체가 <strong>한 샘플 창에 같이 잡히는</strong> 순간이다.
+    이때는 어느 쪽을 골라도 틀릴 수 있다 — 가장 가까운 쪽 분위수(<a href="#pinch">§06-1</a>)든
+    중앙값이든 마찬가지다. 그래서 고르지 않기로 했다.
+    핀치 지점 5×5 이웃 깊이의 <strong>퍼짐(최대−최소)이 0.12를 넘으면</strong>
+    여기는 가림 경계라고 표시하고, 광원을 움직이지 않는다.</p>
+
+  <pre><code>neighborhood.sort()
+let depth = neighborhood[index]
+
+<span class="cmt">// 이웃 깊이의 퍼짐이 크면 손과 뒤 물체가 한 창에 같이 잡힌 것이다</span>
+let spread = neighborhood[neighborhood.count - 1] - neighborhood[0]
+<span class="hl">return (depth, spread &lt; 0.12)</span>   <span class="cmt">// .1 = depthIsReliable</span>
+
+<span class="cmt">// 광원 갱신 쪽</span>
+<span class="hl">guard pinch.depthIsReliable else { return }</span>   <span class="cmt">// 틀린 z로 옮기느니 그 자리에 둔다</span></code></pre>
+
+  <h3>스냅 애니메이션도 지웠다</h3>
+  <p>잡는 순간 광원이 손끝으로 날아가는 연출이 있었다. 보기 좋으라고 넣은 것인데,
+    <strong>그 사이 프레임에서는 광원이 손과 다른 곳에 있다</strong>는 뜻이다.
+    그리고 이 버그가 눈에 띄던 순간이 정확히 거기였다.
+    지금은 보간 없이 <strong>즉시 배치</strong>한다.</p>
+
+  <div class="call">
+    <span class="lbl">이번 단계의 원칙</span>
+    <p><strong>광원이 엉뚱한 곳에 붙어 있는 것보다, 잠깐 사라지는 쪽이 낫다.</strong>
+      추측은 항상 "대부분의 경우 맞다"로 정당화되지만, 사용자가 기억하는 것은 틀린 순간이다.
+      틀린 자리에 고정된 광원은 사용자가 조작으로 되돌릴 수 없고, 사라진 광원은 다시 잡으면 된다.</p>
+    <p>이것은 <a href="#occlusion-bug">§06-3</a>의 "상태를 고치는 것보다 상태를 없애는 쪽이 견고하다"와
+      같은 방향이다. 다만 그때는 <em>광원의 수명</em>에만 적용했고, <em>z 추정</em>에는 적용하지 못했다.</p>
+  </div>
+
+  <div class="call good">
+    <span class="lbl">검증</span>
+    <p>손이 프레임을 벗어나면 <strong>즉시 핀치=놓음</strong>, z는 그 자리에 고정된다.
+      깊이 처리 <strong>17.8 ms 유지</strong>, 크래시 없음.</p>
   </div>
 </section>
 
@@ -1348,6 +1422,103 @@ addObserver:... name:<span class="hl">@"info.v002.Syphon.ServerAnnounce"</span><
     <p style="margin-top:.8rem">앞서 기록한 <strong>Espresso/Vision 모델 로드 계열의 간헐 레이스</strong>와
       같은 부류로 보인다(<a href="#crash-triage">§07-1</a>). 재현 조건을 못 잡았으므로
       고쳤다고 쓰지 않는다. <strong>미해결로 남긴다.</strong></p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="extension">
+  <h2><span class="num">09-3</span>OBS 없이 Zoom으로</h2>
+  <p class="dek">Syphon은 남이 치른 행정 비용을 빌려 쓰는 길이었다(<a href="#broadcast">§09-2</a>). 이번엔 우리 이름으로 Zoom의 카메라 목록에 오르는 길 — 빌드와 임베드까지 갔고, 설치는 조건부다.</p>
+
+  <p>목적은 하나다. <strong>OBS 없이 Zoom에 직접 나타난다.</strong>
+    <code>DelightCamera</code> 타깃을 새로 만들고
+    <code>CMIOExtensionProviderSource</code> · <code>DeviceSource</code> · <code>StreamSource</code>와
+    안내 화면 페인터를 넣었다.</p>
+
+  <h3>설계 판단 둘 — 둘 다 사용자가 겪을 순간에 대한 것이다</h3>
+  <ul>
+    <li><strong>고정 UUID를 쓴다</strong>(장치 <code>6B9D4F2A-…</code>, 스트림 <code>A1C8E3D7-…</code>).
+      실행할 때마다 새로 만들면 Zoom이 <strong>다른 장치로 인식</strong>해,
+      사용자는 매번 카메라를 다시 골라야 한다.</li>
+    <li><strong>검은 화면 대신 안내 패턴을 내보낸다.</strong> 앱이 아직 연결되기 전이라도
+      "Delight / 앱을 실행하고 송출을 켜세요"와 텅스텐 색 맥동을 그린다.
+      검은 화면을 본 사용자는 <strong>고장으로 판단한다</strong> — 대기 상태와 고장은 구분되어야 한다.</li>
+  </ul>
+  <p>앱 쪽에서는 <code>OSSystemExtensionManager</code>로 설치를 요청하고, 설정 화면에 요건을 표시한다.</p>
+
+  <h3>pbxproj에 타깃을 손으로 추가했다</h3>
+  <p>이 프로젝트는 <strong>동기화 폴더</strong>를 쓰기 때문에 <em>파일</em>은 폴더에 넣기만 하면 된다.
+    하지만 <strong>타깃</strong>은 그렇지 않다. Xcode 없이 새 타깃을 넣으려면 다음을 전부 엮어야 한다.</p>
+  <ul>
+    <li>파일 참조와 동기화 그룹</li>
+    <li>빌드 페이즈 3종 — Sources · Frameworks · Resources</li>
+    <li>네이티브 타깃, 빌드 설정 2벌(Debug/Release), 설정 목록</li>
+    <li>타깃 의존성과 컨테이너 아이템 프록시</li>
+    <li>앱 번들에 확장을 넣을 <strong>임베드용 CopyFiles 페이즈</strong></li>
+  </ul>
+  <p>하나라도 빠지면 프로젝트 파일이 열리지 않거나 타깃이 조용히 무시된다.
+    그래서 <strong>백업 후 3단계로 나눠 넣고, 각 단계마다 <code>plutil -lint</code>로 검증</strong>했다.</p>
+
+  <pre><code>$ xcodebuild -list
+   Targets: Delight, <span class="hl">DelightCamera</span>
+
+<span class="cmt"># 앱 번들 안에 들어간 결과</span>
+Delight.app/Contents/Library/SystemExtensions/<span class="hl">DelightCamera.systemextension</span>
+   arm64 실행 파일 291,424 바이트 · 서명됨
+   TeamIdentifier=QYZ2Q85Y7Z · flags=0x10000(runtime)
+   Info.plist: CMIOExtensionMachServiceName =
+      QYZ2Q85Y7Z.forgelab.aitech-gmail.com.Delight.Camera</code></pre>
+
+  <h3>확장은 앱과 다른 환경이다 — 컴파일 에러가 그걸 알려줬다</h3>
+  <p>같은 리포, 같은 Swift, 같은 기계다. 그런데 확장은 앱이 링크하는 프레임워크를 링크하지 않는다.
+    이 사실이 에러 두 개로 먼저 나타났다.</p>
+
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">type 'NSAttributedString.Key' has no member 'font'</div>
+      <h4>.font·.foregroundColor는 AppKit이 주는 확장이다</h4>
+      <p><code>NSAttributedString.Key</code> 자체는 Foundation에 있지만
+        <code>.font</code>와 <code>.foregroundColor</code>는 <strong>AppKit이 얹은 확장</strong>이다.
+        카메라 확장은 AppKit을 링크하지 않으므로 존재하지 않는다.</p>
+      <p class="fix">→ CoreText 상수를 직접 쓴다 — <code>kCTFontAttributeName</code>,
+        <code>kCTForegroundColorAttributeName</code>.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">cannot find 'kIOAudioDeviceTransportTypeVirtual' in scope</div>
+      <h4>CoreAudio 상수도 따라오지 않는다</h4>
+      <p>가상 장치임을 알리는 transport type 상수는 CoreAudio가 준다.
+        여기서도 프레임워크가 없으니 이름이 없다.</p>
+      <p class="fix">→ FourCC <code>'virt'</code>(<code>0x76697274</code>)를 직접 넣는다.</p>
+    </div>
+  </div>
+
+  <div class="call bad">
+    <span class="lbl">정직하게 — 이 머신에서는 설치할 수 없다</span>
+    <p>빌드되고, 서명되고, 앱 번들 안에 임베드까지 된다. 그런데 <strong>설치는 못 한다.</strong>
+      확인한 사실은 둘이다.</p>
+    <pre style="margin:.5rem 0"><code>$ csrutil status
+System Integrity Protection status: <span class="hl">enabled</span>
+
+$ security find-identity -v -p codesigning
+   Apple Development: …      <span class="cmt">← Developer ID 없음</span></code></pre>
+    <p>설치하려면 둘 중 하나가 필요하다.
+      <strong>(a)</strong> Developer ID 서명 + 공증 + <code>/Applications</code>에 설치, 또는
+      <strong>(b)</strong> SIP를 끄고 <code>systemextensionsctl developer on</code>.
+      둘 다 <strong>사용자가 결정하고 실행할 일</strong>이지 코드가 우회할 수 있는 것이 아니다.</p>
+    <p>그래서 코드가 <strong>요건을 미리 검사해 설정 화면에 표시</strong>한다.
+      설치가 실패한 뒤 로그를 뒤지는 것보다, 왜 안 되는지 먼저 아는 편이 낫다.</p>
+  </div>
+
+  <h3>그래서 두 경로가 공존한다</h3>
+  <p><a href="#broadcast">§09-2</a>의 Syphon → OBS 경로는 <strong>이 조건 없이 지금 동작한다.</strong>
+    서명 등급도, SIP 상태도, 재부팅도 묻지 않는다.
+    CMIO는 조건이 갖춰진 환경에서 OBS를 지우는 경로이고, Syphon은 그 조건이 없을 때의 경로다.
+    한쪽이 다른 쪽을 대체하는 것이 아니라, <strong>사용자 환경이 어느 쪽인지가 선택을 정한다.</strong></p>
+
+  <div class="call good">
+    <span class="lbl">검증 — 확장 타깃을 추가한 뒤에도 앱은 그대로다</span>
+    <p>깊이 처리 <strong>17.8 ms</strong> 유지, 매트 OK, <strong>송출 ON</strong>, 크래시 없음.
+      새 타깃이 기존 앱 경로에 회귀를 일으키지 않았다는 것까지 확인하고 넘어간다.</p>
   </div>
 </section>
 

@@ -84,7 +84,9 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
 - [x] **P4** AO · Vision 세그멘테이션 · 화질 개선(해상도·sRGB·후광)
 - [x] **P5** 깊이 안정화 (edge-stopping 시간필터 · 배경 앵커 affine 정합) — 플리커 8배 감소
 - [x] **P6** Syphon → OBS → Zoom (서명·공증·재부팅 없는 경로)
-- [ ] **P7** CMIO Camera Extension
+- [ ] **P7** CMIO Camera Extension — **부분 완료.** 확장 타깃 빌드 · 서명 · 앱 번들 임베드까지 됩니다.
+  설치는 조건부입니다: Developer ID 서명 + 공증, 또는 SIP를 끄고 개발자 모드.
+  그 조건이 없는 환경에서는 P6(Syphon → OBS) 경로가 그대로 동작합니다
 
 ## 프라이버시
 
