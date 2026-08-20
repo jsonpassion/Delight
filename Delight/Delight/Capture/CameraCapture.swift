@@ -219,6 +219,13 @@ extension CameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
               let cvTexture,
               let texture = CVMetalTextureGetTexture(cvTexture) else { return }
 
+        // ⚠️ 반드시 flush해야 한다.
+        // CVMetalTextureCache는 만든 텍스처를 내부에 붙잡고 있고, 놓아주라고
+        // 말하지 않으면 IOSurface가 프레임마다 쌓인다. 30fps로 한 시간이면 10만 개다.
+        // 실제로 이걸 빠뜨려 WindowServer가 굶었고 커널 watchdog이 맥을 재부팅시켰다
+        // (panic: no successful checkins from WindowServer in 120 seconds).
+        CVMetalTextureCacheFlush(cache, 0)
+
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         onFrame?(CameraFrame(texture: texture,
                              pixelBuffer: pixelBuffer,

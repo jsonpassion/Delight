@@ -87,6 +87,9 @@ nonisolated final class PersonMatte: @unchecked Sendable {
             return
         }
 
+        // 캡처 쪽과 같은 이유로 flush한다 — 안 하면 IOSurface가 쌓인다.
+        CVMetalTextureCacheFlush(cache, 0)
+
         // CVMetalTexture를 함께 잡고 있어야 texture가 유효하다.
         lock.lock()
         ring.append((texture, cvTexture))
