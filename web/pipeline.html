@@ -151,6 +151,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#model">왜 이 모델인가</a></li>
     <li><a href="#verify">검증 방법론</a></li>
     <li><a href="#budget">성능 예산</a></li>
+    <li><a href="#profiling">변동폭의 정체</a></li>
     <li><a href="#repro">재현 절차</a></li>
   </ol>
 </nav>
@@ -564,6 +565,11 @@ return neighborhood[index]   <span class="cmt">// 평균도 중앙값도 아닌 
           <td class="note">출력이 518×392. 카메라 해상도까지 <strong>3배 확대</strong>되고 있었다</td>
           <td class="note">조명만 1554×1176로 계산. 깊이맵은 저주파라 저해상도로 둬도 티가 안 난다</td>
         </tr>
+        <tr class="lead">
+          <td>디테일이 뭉개짐</td>
+          <td class="note">출력이 <strong>1554×1176 고정</strong>인데 카메라는 1552×1552. 다운샘플 + 크롭이 일어났다</td>
+          <td class="note">캡처를 먼저 만들고 <code>activeDimensions</code>로 실제 해상도를 읽어 파이프라인을 그 크기로 생성</td>
+        </tr>
         <tr>
           <td>색이 뜸 · 대비 상실</td>
           <td class="note">sRGB로 인코딩된 값을 <strong>선형으로 착각</strong>하고 조명을 더했다</td>
@@ -582,6 +588,25 @@ return neighborhood[index]   <span class="cmt">// 평균도 중앙값도 아닌 
       </tbody>
       <caption>sRGB를 텍스처 포맷(_srgb)으로 처리하지 않고 셰이더에서 한 이유: 같은 카메라 텍스처를 전처리가 0-255 sRGB 원본으로 읽어야 한다(모델이 그렇게 학습됐다). 포맷을 바꾸면 추론 입력이 깨진다.</caption>
     </table>
+  </div>
+
+  <h3>출력 해상도가 카메라 해상도가 아니었다</h3>
+  <p>3배 확대를 고친 뒤에도 "카메라 질감이 아니다"가 남아 있었다. 남은 원인은 출력 크기가
+    <strong>1554×1176으로 고정</strong>돼 있었다는 것이다. 실제 카메라는 1552×1552로 들어온다.
+    가로는 거의 같지만 세로가 잘리고, 그 과정에서 <strong>다운샘플과 크롭이 동시에</strong> 일어났다.
+    확대만 없앴을 뿐 여전히 리샘플을 한 번 더 거치고 있었던 셈이다.</p>
+  <p>수정은 순서를 바꾸는 것이다. 캡처를 <em>먼저</em> 만들어 <code>activeDimensions</code>로 실제 해상도를 읽고,
+    그 값에 맞춰 파이프라인을 생성한다. 상한은 1920×1440으로 둔다 —
+    레이마칭 비용이 픽셀 수에 선형이라 GPU 예산을 지켜야 한다.</p>
+  <p>카메라 포맷도 <code>sessionPreset</code>에 맡기지 않고 명시적으로 고른다.
+    맡기면 시스템이 30 fps 저해상도 포맷을 줄 수 있다. 선택 기준은
+    <strong>프레임레이트 우선, 그다음 해상도</strong>다 — 60 fps 소스가 손 인터랙션의 체감에 직결되기 때문이다.</p>
+
+  <div class="call good">
+    <span class="lbl">로그 확인</span>
+    <pre style="margin:.5rem 0 0"><code>카메라 1552x1552 → 출력 1552x1552</code></pre>
+    <p style="margin-top:.6rem">픽셀 수는 1.83M에서 2.41M으로 31% 늘었지만
+      깊이 처리는 오히려 빨라졌다. 이유는 <a href="#profiling">§09-1</a>에 있다.</p>
   </div>
 
   <h3>그리고 흰 후광</h3>
@@ -645,6 +670,22 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
   <p>깊이맵은 <strong>한 번의 캘리브레이션</strong>에만 쓰고, 추적은 손 크기가 맡는다.
     두 신호의 강점이 정확히 상보적이다 — 깊이맵은 절대 거리를 알지만 가림에 약하고,
     손 크기는 절대 거리를 모르지만 가림에 강하다.</p>
+
+  <h3>광원 수명 — 놓으면 사라진다</h3>
+  <p>추적을 아무리 다듬어도 남는 증상이 있었다. 손을 놓으면 광원이 <strong>마지막 자리에 그대로 남는다.</strong>
+    그 자리가 하필 손등 뒤나 얼굴 속이면 "왜 저기 박혀 있지"가 된다.
+    깊이 추정을 더 정교하게 만들어 이상한 자리에 박히는 경우를 줄이는 길도 있었다.</p>
+  <p>대신 <strong>그 상태가 존재할 수 없게</strong> 만들었다. <code>LightRig.isLit</code> —
+    광원은 핀치 중일 때만 존재한다. 놓으면 <code>fill()</code>이 lightCount 0을 내보내고 광원은 즉시 사라진다.
+    잘못된 위치에 남은 광원이라는 상태 자체가 없어진다.</p>
+
+  <div class="call">
+    <span class="lbl">설계 교훈</span>
+    <p><strong>상태를 고치는 것보다 상태를 없애는 쪽이 견고하다.</strong>
+      추정을 개선하는 방향은 "얼마나 좋아졌나"가 항상 확률적이지만,
+      상태를 제거하는 방향은 증상이 <em>발생할 수 없다</em>는 것을 코드에서 읽을 수 있다.</p>
+    <p>단, 마우스 모드는 항상 켜 둔다 — 거기서는 커서가 곧 광원이라 이 규칙이 자연스럽게 성립한다.</p>
+  </div>
 </section>
 
 <!-- ─────────────────────────────────────── -->
@@ -694,11 +735,11 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
   <p>이 패스를 단일 커맨드 버퍼에 끼워 넣다가 인코딩 순서 해저드를 하나 만들었다 —
     <a href="#bugs">§07</a>에 적었다.</p>
 
-  <div class="call bad">
-    <span class="lbl">정직한 성능 관찰 — 미해결</span>
+  <div class="call good">
+    <span class="lbl">정직한 성능 관찰 — 이후 해결</span>
     <p>안정화 ON 구간 후반에 깊이 처리 시간이 <strong>20.7 ms → 33.5 ms까지 변동</strong>했다.
-      30 fps 예산(33.3 ms)의 경계다. 원인은 미확정 — 세그멘테이션(15 Hz)과의 간섭으로 추정하지만
-      아직 확인하지 못했다. 추후 과제로 기록해 둔다.</p>
+      30 fps 예산(33.3 ms)의 경계다. 당시에는 세그멘테이션(15 Hz)과의 간섭으로 추정했고,
+      그 추정은 <strong>틀렸다</strong>. 구간을 쪼개 재보니 콜드 스타트였다 — <a href="#profiling">§09-1</a>.</p>
   </div>
 </section>
 
@@ -1049,6 +1090,15 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
     </table>
   </div>
 
+  <div class="call good">
+    <span class="lbl">실측 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps)</span>
+    <pre style="margin:.5rem 0 0"><code>깊이  17.85 / 17.80 / 17.99 / 17.86 / 17.76 ms
+구간  enc 0.1 · gpu 15.8~16.6 · aff 0.0~1.0 · flk 1.0</code></pre>
+    <p style="margin-top:.6rem">위 예산표는 60 fps 목표의 배분이고, 이것은 현재 앱이 실제로 쓰는 시간이다.
+      30 fps 예산 33.3 ms의 절반 수준이며, 그 전에는 22~32 ms를 오갔다.
+      무엇을 어떻게 재서 여기까지 왔는지는 <a href="#profiling">§09-1</a>에 있다.</p>
+  </div>
+
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
   <ol class="body">
     <li><strong>INT8 / palettized 변형</strong> — 실측 완료, 기각(<a href="#model">§07-2</a>).
@@ -1060,6 +1110,105 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   </ol>
   <p>학습은 마지막 카드다. 웹캠 앞 상반신이라는 좁은 도메인으로 증류하면
     같은 파라미터 수로 훨씬 선명해지지만, 그 전에 위 네 가지를 다 소진해야 한다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="profiling">
+  <h2><span class="num">09-1</span>변동폭의 정체</h2>
+  <p class="dek">전체 시간만 재면 "변동한다"까지만 알 수 있다. 구간을 쪼개는 순간 답이 나왔다.</p>
+
+  <p>깊이 처리 시간이 <strong>22~32 ms 사이를 오갔다</strong>. 30 fps 예산은 33.3 ms이므로
+    나쁜 프레임은 경계에 닿는다. 평균이 나쁜 게 아니라 <strong>변동폭이 나쁜</strong> 종류의 문제다.</p>
+
+  <div class="call bad">
+    <span class="lbl">첫 가설 — 그럴듯했고, 틀렸다</span>
+    <p>세그멘테이션이 15 Hz로 Vision을 돌린다. 깊이 추론과 GPU를 나눠 쓰니
+      <strong>세그멘테이션이 도는 프레임만 느려진다</strong>고 추정했다.
+      주기가 있는 부하와 주기가 있어 보이는 변동 — 설명이 맞아떨어졌다.</p>
+    <p>이 가설을 실험 없이 믿었으면 세그멘테이션 스케줄링을 며칠 만졌을 것이다.
+      <strong>엉뚱한 곳을 최적화하는 데 드는 비용은 아무것도 안 하는 것보다 크다</strong> —
+      코드는 복잡해지고 원인은 그대로 남는다.</p>
+  </div>
+
+  <h3>먼저 구간을 쪼갰다</h3>
+  <p>그때까지 계측한 것은 <code>process()</code> 전체 시간 하나뿐이었다.
+    그 숫자로는 "변동한다"는 사실 외에 아무것도 말할 수 없다.
+    그래서 네 구간으로 나눠 각각 찍었다 — <strong>인코딩(CPU) · GPU 대기 · affine 정합(CPU) · 플리커 측정(CPU)</strong>.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>구간</th><th>주체</th><th class="n">실측 범위</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td>enc (인코딩)</td><td>CPU</td><td class="n">0.1~0.2 ms</td><td class="note">안정</td></tr>
+        <tr class="lead"><td>gpu (완료 대기)</td><td>GPU</td><td class="n">18.6~30.2 ms</td><td class="note">여기가 전부 변동한다</td></tr>
+        <tr><td>aff (affine 정합)</td><td>CPU</td><td class="n">1.2~1.7 ms</td><td class="note">안정</td></tr>
+        <tr><td>flk (플리커 측정)</td><td>CPU</td><td class="n">1.1~1.3 ms</td><td class="note">안정</td></tr>
+      </tbody>
+      <caption>1차 구간 실측. CPU 세 구간을 다 더해도 3 ms대이고 흔들리지 않는다. 변동은 전부 GPU 대기 구간에 있었다.</caption>
+    </table>
+  </div>
+
+  <h3>그다음 이등분했다</h3>
+  <p>GPU 대기가 범인이라는 것까지는 나왔다. 그 안에서 세그멘테이션이 원인인지 확인하려면
+    끄고 켜보면 된다. <code>--no-matte</code> 플래그로 세그멘테이션만 빼고 20초, 켜고 20초를 각각 돌렸다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>세그멘테이션</th><th class="n">gpu 평균</th><th class="n">최소</th><th class="n">최대</th><th class="n">변동폭</th></tr></thead>
+      <tbody>
+        <tr><td>OFF (<code>--no-matte</code>)</td><td class="n">19.2 ms</td><td class="n">18.4</td><td class="n">20.2</td><td class="n">1.8</td></tr>
+        <tr><td>ON</td><td class="n">18.5 ms</td><td class="n">18.0</td><td class="n">19.9</td><td class="n">1.9</td></tr>
+      </tbody>
+      <caption>M5, 각 20초, 로그 n=5. 변동폭이 1.8과 1.9로 사실상 같다. 세그멘테이션은 범인이 아니다.</caption>
+    </table>
+  </div>
+
+  <p>더 흥미로운 것은 <strong>양쪽 다 변동폭이 2 ms 미만</strong>이라는 사실이다.
+    22~32 ms라는 큰 변동이 이 조건에서는 재현되지 않았다. 차이는 하나였다 —
+    이번에는 앱이 이미 한동안 돌고 있었다.</p>
+
+  <div class="call good">
+    <span class="lbl">진짜 원인</span>
+    <p><strong>셰이더·파이프라인 콜드 스타트.</strong> 처음 측정이 워밍업 구간을 포함하고 있었을 뿐,
+      정상 상태의 GPU 시간은 처음부터 안정적이었다. 고칠 코드는 없었다 —
+      고칠 것은 <strong>측정 방법</strong>이었다.</p>
+  </div>
+
+  <h3>그리고 CPU 후처리 2.5 ms를 지웠다</h3>
+  <p>구간 데이터가 있으니 부수적으로 지울 것도 보였다. 둘 다 GPU가 아니라 CPU 쪽이다.</p>
+  <ul>
+    <li><strong>affine 정합을 5프레임마다</strong> — 배경 통계는 천천히 변하는데
+      매 프레임 800샘플을 정렬하고 있었다. 1.3 ms → 0.0~1.0 ms.</li>
+    <li><strong>플리커 측정은 <code>--autostart</code>에서만</strong> — 이 값은 순수 진단 지표다.
+      평상시 실행에 들어갈 이유가 없다. 1.2 ms → 0.</li>
+  </ul>
+
+  <h3>최종 실측 — 해상도를 올렸는데 빨라졌다</h3>
+  <p>같은 시기에 출력 해상도를 카메라 네이티브로 바꿨다(<a href="#quality">§06-2</a>).
+    픽셀 수가 늘었으니 느려질 것을 각오했는데 결과는 반대였다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th></th><th class="n">출력 해상도</th><th class="n">픽셀 수</th><th class="n">깊이 처리</th></tr></thead>
+      <tbody>
+        <tr><td>이전</td><td class="n">1554×1176</td><td class="n">1.83 M</td><td class="n">22~32 ms 변동</td></tr>
+        <tr class="lead"><td>지금</td><td class="n">1552×1552</td><td class="n">2.41 M (+31%)</td><td class="n">17.8 ms 안정</td></tr>
+      </tbody>
+      <caption>M5, 캡처 30.0 fps. 지금 값의 원본 로그는 17.85 / 17.80 / 17.99 / 17.86 / 17.76 ms이고 구간은 enc 0.1 · gpu 15.8~16.6 · aff 0.0~1.0 · flk 1.0이다.</caption>
+    </table>
+  </div>
+
+  <p>이유는 둘이다. 출력이 카메라와 1:1이 되면서 <strong>다운샘플 샘플링이 사라졌고</strong>
+    (텍스처 페치가 1:1이다), 위에서 지운 <strong>CPU 후처리 2.5 ms</strong>가 빠졌다.
+    픽셀이 31% 늘어난 비용보다 이 둘이 컸다.</p>
+
+  <div class="call">
+    <span class="lbl">남는 것</span>
+    <p>얻은 것은 5 ms가 아니라 <strong>측정 방식</strong>이다.
+      전체 시간 하나만 보고 있었을 때는 그럴듯한 가설을 반증할 방법이 없었다.
+      구간을 쪼개니 CPU가 무죄라는 것이 즉시 나왔고, 이등분하니 첫 가설이 즉시 기각됐다.
+      <strong>가설을 세우기 전에 계측을 쪼개는 것이 순서다.</strong></p>
+  </div>
 </section>
 
 <!-- ─────────────────────────────────────── -->
