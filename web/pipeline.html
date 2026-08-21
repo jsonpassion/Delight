@@ -149,9 +149,11 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#prediction">추측을 없앴다</a></li>
     <li><a href="#specular">하이라이트가 점이었던 이유</a></li>
     <li><a href="#simplify">노브를 전부 없앴다</a></li>
+    <li><a href="#heightfield">높이장으로 다시 짓다</a></li>
     <li><a href="#bugs">실제로 깨진 것들</a></li>
     <li><a href="#crash-triage">크래시 한 증상, 원인 넷</a></li>
     <li><a href="#model">왜 이 모델인가</a></li>
+    <li><a href="#reboot">맥을 재부팅시킨 누수</a></li>
     <li><a href="#verify">검증 방법론</a></li>
     <li><a href="#budget">성능 예산</a></li>
     <li><a href="#profiling">변동폭의 정체</a></li>
@@ -159,6 +161,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#extension">OBS 없이 Zoom으로</a></li>
     <li><a href="#repro">재현 절차</a></li>
     <li><a href="#lessons">회고: 반복된 실수와 반복된 성공</a></li>
+    <li><a href="#next">다음 단계</a></li>
   </ol>
 </nav>
 
@@ -229,8 +232,8 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
       <line x1="546" y1="156" x2="574" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
 
       <rect x="576" y="128" width="96" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="624" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C3·C4</text>
-      <text x="624" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">노멀·AO</text>
+      <text x="624" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C3</text>
+      <text x="624" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">높이장·노멀</text>
       <line x1="672" y1="156" x2="700" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
 
       <rect x="702" y="128" width="102" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
@@ -246,7 +249,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
       <line x1="450" y1="232" x2="804" y2="232" stroke="currentColor" opacity=".3"/>
 
       <text x="6" y="292" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C0 전처리(0-255 RGB · NCHW · 행패딩) · ML 추론 · C1 affine 정합+시간필터 · C2 joint bilateral 업샘플</text>
-      <text x="6" y="310" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C3 언프로젝션+5-tap 노멀 · C4 half-res AO · C5 레이마칭 그림자+delta lighting+역광</text>
+      <text x="6" y="310" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C3 높이장 재투영(높이+노멀+마스크) · C5 텍스처공간 레이마칭 그림자+AO+delta lighting+역광</text>
       <text x="6" y="328" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">Sink = 프리뷰 / Syphon→OBS / CMIO Camera Extension</text>
     </svg>
     <figcaption>추론 출력 텐서의 백킹 버퍼를 다음 컴퓨트 스테이지가 그대로 읽는다. 포맷 변환도, CPU 왕복도, 인터롭 동기화도 없다. 깊이는 30 Hz, 렌더는 60 Hz로 분리해 추론 비용을 두 프레임에 나눈다.</figcaption>
@@ -260,9 +263,8 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
         <tr class="lead"><td>ML 추론</td><td>텐서 → 역깊이 텐서</td><td class="n">15.4 ms</td><td class="note">전체 비용의 98%. 여기가 예산의 전부다</td></tr>
         <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정</td></tr>
         <tr><td>C2 업샘플</td><td>518×392 → 출력 해상도</td><td class="n">~1.0 ms</td><td class="note">bilinear면 실루엣이 뭉개져 그림자가 얼굴 밖으로 샌다</td></tr>
-        <tr><td>C3 지오메트리</td><td>깊이 → 위치·노멀·마스크</td><td class="n">~0.8 ms</td><td class="note">조명 계산에 노멀이 필요하다. 5-tap이라야 실루엣이 안 깨진다</td></tr>
-        <tr><td>C4 AO</td><td>위치·노멀 → 차폐량</td><td class="n">~1.5 ms</td><td class="note">턱밑·목·코 옆 접촉 그늘. 광원과 무관하게 항상 이득</td></tr>
-        <tr><td>C5 리라이팅</td><td>전부 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">레이마칭 그림자 + 확산 + 스펙큘러 + 역광</td></tr>
+        <tr><td>C3 높이장</td><td>깊이 → 높이·노멀·마스크</td><td class="n">~0.8 ms</td><td class="note">노멀은 이웃 높이차로 구한다. 뷰공간 위치 복원이 없다(<a href="#heightfield">§06-8</a>)</td></tr>
+        <tr><td>C5 리라이팅</td><td>높이·노멀·원본 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">텍스처 공간 레이마칭 + AO + 확산 + 스펙큘러 + 역광. 별도 AO 패스(C4)는 여기로 합쳐졌다</td></tr>
       </tbody>
       <caption>비용은 M5 기준 추정(추론만 실측). ML 15.4 ms가 압도적이므로, 최적화 노력은 전부 그쪽에 걸어야 한다 — 나머지를 다 합쳐도 절반이 안 된다.</caption>
     </table>
@@ -414,6 +416,13 @@ AVCaptureConnection.cameraIntrinsicMatrixDelivery*  → API_UNAVAILABLE(macos)</
       크면 배경 전체가 사람 뒤에 있다고 판정되어 화면이 까맣게 죽고, 작으면 그림자가 아예 안 생긴다.
       person matte 안쪽은 몸통 두께로, 배경은 얇게 주는 프라이어가 "가까운 물체가 빛을 가린다"를
       성립시키는 유일한 장치다.</p>
+  </div>
+
+  <div class="call cool" style="max-width:44rem">
+    <span class="lbl">이 절의 전제가 뒤늦게 구현이 됐다</span>
+    <p>"높이장으로 보면 같은 것"이라고 써 놓고, 실제 구현은 오랫동안 씬을 3D 점구름으로 다뤘다 —
+      광선을 뷰공간에서 진행시키고 매 스텝 화면에 재투영하는 방식이다.
+      텍스처 공간 레이마칭으로 옮긴 것은 나중이다(<a href="#heightfield">§06-8</a>).</p>
   </div>
 
   <h3>부드러운 그림자는 공짜에 가깝다</h3>
@@ -700,6 +709,20 @@ if (!isGrabbing || referenceHandScale &lt;= 0) {
       상태를 제거하는 방향은 증상이 <em>발생할 수 없다</em>는 것을 코드에서 읽을 수 있다.</p>
     <p>단, 마우스 모드는 항상 켜 둔다 — 거기서는 커서가 곧 광원이라 이 규칙이 자연스럽게 성립한다.</p>
   </div>
+
+  <div class="call bad">
+    <span class="lbl">이 결정은 이후 뒤집혔다 — 놓아도 광원은 남는다</span>
+    <p>지금은 <strong>핀치를 놓아도 광원이 마지막 자리에 그대로 남는다</strong>(<a href="#heightfield">§06-8</a>).
+      위의 <code>isLit</code> 논리는 여전히 옳지만, 그 옳음이 <strong>쓰는 사람의 감각과 어긋났다.</strong>
+      조명을 잡았다 놓는 동작에서 기대되는 것은 "빛이 꺼진다"가 아니라
+      <em>스탠드를 그 자리에 놓아둔다</em>였다. 놓을 때마다 어두워지면 위치를 조정하는 일 자체가 안 된다.</p>
+    <p>대신 광원이 이상한 자리에 박히는 문제는 다른 쪽에서 막았다 —
+      <a href="#prediction">§06-5</a>의 "모르면 움직이지 않는다"(가림이 의심되면 광원을 두고 손만 놓는다)와,
+      광원을 항상 핀치보다 카메라 쪽에 띄우는 규칙이다.
+      즉 <strong>상태를 없애는 대신, 그 상태가 나쁜 값을 갖지 못하게</strong> 했다.</p>
+    <p>기록 목적으로 위 서술은 지우지 않는다. 당시 판단의 근거는 실제로 저것이었고,
+      뒤집힌 이유는 <strong>견고함이 아니라 사용감</strong>이었다는 것까지가 이 결정의 전부다.</p>
+  </div>
 </section>
 
 <!-- ─────────────────────────────────────── -->
@@ -951,6 +974,130 @@ n = normalize(n);</code></pre>
   <p>같은 방향의 결정이 앞에도 있었다 — 광원 수명(<a href="#occlusion-bug">§06-3</a>),
     스냅 애니메이션 제거(<a href="#prediction">§06-5</a>).
     셋 다 <strong>상태와 선택지를 줄이면 틀릴 수 있는 조합도 줄어든다</strong>는 같은 이야기다.</p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="heightfield" class="wide">
+  <h2><span class="num">06-8</span>높이장으로 다시 짓다</h2>
+  <p class="dek" style="max-width:44rem">같은 그림자를, 광선이 직선으로 가는 공간에서 계산한다. 투영이 통째로 사라졌다. 코드 2531 → 2615줄.</p>
+
+  <p>이 아이디어의 원 저자가 공개한 구조는 네 단계였다.</p>
+
+  <pre style="max-width:44rem"><code>DepthArt → Height map reprojection → to relighting the height map.
+then I basically do ray marching on the reconstructed scene (a little like POM)</code></pre>
+
+  <p><a href="#raymarch">§05</a>에 "높이장으로 보면 POM의 셀프섀도우와 같은 것"이라고 써 두고도,
+    정작 구현은 씬을 <strong>3D 점구름</strong>으로 다루고 있었다.
+    광선을 뷰공간에서 진행시키고 <strong>매 스텝 화면에 다시 투영</strong>해서 그 자리의 깊이를 읽는다.
+    높이장으로 다루면 광선은 텍스처 공간에서 <strong>직선</strong>으로 간다 —
+    투영이 필요 없다. 시차 폐색 매핑이 오래 써온 성질이 바로 이것이다.</p>
+
+  <div class="tw" style="max-width:44rem">
+    <table>
+      <thead><tr><th>항목</th><th>기존 — 점구름</th><th>지금 — 높이장</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td>레이마칭 공간</td><td class="note">뷰공간(미터). 스텝마다 화면으로 재투영</td><td class="note">텍스처 공간(uv). 광선이 직선</td></tr>
+        <tr><td>스텝당 비용</td><td class="note">나눗셈 2회 + 텍스처 페치 2회</td><td class="note">페치 1회</td></tr>
+        <tr><td>필요한 버퍼</td><td class="note">뷰공간 위치 + 노멀 + 깊이</td><td class="note">높이 + 노멀</td></tr>
+        <tr><td>노멀</td><td class="note">언프로젝션한 위치의 5-tap 외적</td><td class="note">이웃 높이차. 위치 복원이 필요 없다</td></tr>
+        <tr><td>없어진 코드</td><td class="note">—</td><td class="note">5-tap 언프로젝션 · <code>projectToScreen</code> · 별도 AO 패스 · <code>Geometry.metal</code> 전체</td></tr>
+      </tbody>
+      <caption>새로 생긴 것은 <code>HeightField.metal</code> 하나다 — 깊이 → 높이 + 노멀 + 마스크를 한 커널에서 만든다. 뷰공간 위치 텍스처는 사라졌다. 조명은 높이와 노멀만 있으면 성립한다.</caption>
+    </table>
+  </div>
+
+  <h3>재투영이 실제로 하는 일은 스케일 정합이다</h3>
+  <p>"height map reprojection"이라는 말이 처음에는 기하 변환처럼 들렸지만, 하는 일은 단위를 맞추는 것이다.
+    <strong>화면 uv 1단위가 실제 몇 미터인지, 높이 1단위가 몇 미터인지를 일치시켜야</strong>
+    광선의 기울기가 물리적으로 옳아진다. 그 비율 하나가 <code>heightToUV</code>다.</p>
+
+  <p>그리고 높이는 <strong>미터가 아니라 [0,1]로 정규화</strong>했다.</p>
+
+  <pre style="max-width:44rem"><code><span class="cmt">// ✗ 미터를 그대로 쓰면: 깊이 범위(수 미터)가 화면 폭(수십 cm)보다 훨씬 크다.</span>
+<span class="cmt">//   작은 깊이 노이즈가 거대한 기울기가 되고, 그 기울기가 노멀과 AO를 타고 증폭된다.</span>
+float h = farDistance - z;
+
+<span class="cmt">// ✓ uv와 같은 [0,1]에 둔다. 실제 종횡비는 heightToUV가 따로 들고 있는다.</span>
+<span class="hl">float h = saturate((farDistance - z) * heightScale);</span></code></pre>
+
+  <h3>단위를 바꾸면 그에 딸린 상수가 전부 바뀐다 — 세 번 검은 화면을 만들었다</h3>
+  <p>커널 구조를 바꾸는 것보다 <strong>미터를 전제로 튜닝해 둔 상수들</strong>을 찾아내는 쪽이 오래 걸렸다.
+    셋 다 컴파일도 되고 실행도 됐다. 화면만 죽었다.</p>
+
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">화면 전체가 검게 죽음 — AO가 전 픽셀에서 포화</div>
+      <h4>① <code>thickness</code>와 AO 반경이 미터 기준 그대로였다</h4>
+      <p>높이가 [0,1]이 됐는데 비교 대상인 두께·AO 반경은 미터 시절 값이었다.
+        모든 이웃이 "차폐"로 판정되어 AO가 전부 1에 붙었다.</p>
+      <p class="fix">→ 정규화 높이 기준으로 다시 잡았다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">또 검은 화면 — 이번엔 조명 기여가 0에 수렴</div>
+      <h4>② 감쇠식 계수가 미터 거리를 전제하고 있었다</h4>
+      <p><code>1/(1 + 6d + 12d²)</code>는 <code>d</code>가 미터일 때 맞춘 값이다.
+        거리가 uv(0~1)로 바뀌자 같은 물리 거리가 훨씬 작은 수가 됐어야 하는데,
+        계수는 그대로라 분모가 커진 쪽으로 어긋나 기여가 0으로 갔다.</p>
+      <p class="fix">→ <code>1/(1 + 1.5d + 2.5d²)</code>로 교정. 화면이 돌아왔다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">평평한 배경에 자글자글한 자기그림자</div>
+      <h4>③ <code>shadowBias</code> 없이 <code>delta &gt; 0</code>만 검사했다</h4>
+      <p>광선이 출발한 표면 자신이 첫 스텝에서 가림물로 잡힌다.
+        높이가 [0,1]로 좁아지면서 수치 여유가 함께 줄어든 것이 표면화한 계기였다.</p>
+      <p class="fix">→ <code>shadowBias &lt; delta &lt; thickness</code>로 하한을 넣었다. <a href="#raymarch">§05</a>의 두께 창에 바닥이 하나 더 생긴 셈이다.</p>
+    </div>
+  </div>
+
+  <h3>추측을 멈추고 각 항을 따로 뽑았다</h3>
+  <p>두 번째 검은 화면에서 "높이장이 잘못 나온 것 아닐까"를 붙잡고 있었다. 그럴듯했지만 증거가 없었다.
+    <code>--debug 1~4</code>로 원본 · AO · 높이장 · 노멀을 각각 화면에 그대로 출력하게 만들고 하나씩 봤다.</p>
+
+  <div class="tw" style="max-width:44rem">
+    <table>
+      <thead><tr><th>디버그 뷰</th><th>본 것</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td><code>--debug 3</code> 높이장</td><td class="note">사람이 흰색(가까움), 배경이 어두움</td><td class="note">정상</td></tr>
+        <tr><td><code>--debug 4</code> 노멀</td><td class="note">얼굴 곡면이 부드럽게 변함</td><td class="note">정상</td></tr>
+        <tr><td><code>--debug 2</code> AO</td><td class="note">얼굴은 밝고 경계만 어두움</td><td class="note">정상</td></tr>
+        <tr class="lead"><td>합성 결과</td><td class="note">검다</td><td class="note">남은 것은 <strong>조명 항</strong>뿐</td></tr>
+      </tbody>
+      <caption>세 개가 정상이면 범인은 나머지 하나다. 이등분과 같은 논리인데, 여기서는 시각화가 이등분의 도구였다.</caption>
+    </table>
+  </div>
+
+  <h3>타일 모양 블록 아티팩트 — 읽으면서 쓰고 있었다</h3>
+  <div class="bugs">
+    <div class="bug">
+      <div class="sym">화면에 격자 모양 블록. 크기가 정확히 16×16의 배수</div>
+      <h4>같은 커널이 <code>heightTexture</code>를 읽으면서 동시에 쓰고 있었다</h4>
+      <p>세그멘테이션이 꺼져 있을 때(<a href="#reboot">§07-3</a> 이후 기본값) 매트 입력 자리에
+        <strong>바인딩할 텍스처가 없어서</strong> <code>heightTexture</code>를 폴백으로 꽂았다.
+        그런데 그 커널이 쓰는 출력도 같은 텍스처였다. 스레드그룹마다 읽기와 쓰기의 순서가 달라진다.</p>
+      <p class="fix">→ 단서는 <strong>블록 크기가 컴퓨트 타일(16×16)과 일치</strong>한다는 것이었다.
+        화면에 스레드그룹 경계가 그대로 보인다면 원인은 셰이더 수식이 아니라 <strong>디스패치 단위의 경쟁</strong>이다.
+        전용 더미 텍스처를 만들어 입력과 출력을 분리했다.</p>
+    </div>
+  </div>
+
+  <h3>핀치 동작 세 가지를 함께 정리했다</h3>
+  <ul style="max-width:44rem">
+    <li><strong>놓아도 광원은 마지막 자리에 남는다.</strong> 조명 스탠드를 놓아두는 감각이다.
+      이것은 <a href="#occlusion-bug">§06-3</a>에서 내린 반대 방향의 결정을 뒤집은 것이다.</li>
+    <li><strong>손이 안 보이면 위치를 예측하지 않는다.</strong> 잡은 상태만 풀고 광원은 그대로 둔다 —
+      <a href="#prediction">§06-5</a>의 "모르면 움직이지 않는다"는 그대로 지킨다.</li>
+    <li><strong>광원은 항상 핀치보다 카메라 쪽에 뜬다</strong>(정규화 높이 +0.05).
+      같은 높이면 광원이 손에 파묻히고, 뒤에 두면 손이 광원을 가린다. 둘 다 "잡고 있다"는 느낌을 깬다.</li>
+  </ul>
+
+  <div class="call bad" style="max-width:44rem">
+    <span class="lbl">정직하게 — 이 재구성은 아직 느리다</span>
+    <p>측정값은 <strong>gpu 22.6~24.3 ms</strong>다. POM 이전(<a href="#budget">§09</a>의 16.2 ms 예산 배분)보다 <strong>느리다.</strong>
+      스텝당 투영은 없앴지만, 별도 AO 패스를 지우면서 <strong>AO를 출력 해상도(2.4 M 픽셀)에서 매 픽셀 계산</strong>하는
+      구조가 됐고 그 비용이 이득을 상쇄했다.</p>
+    <p>AO를 높이장 해상도(518×392)로 내리면 되찾을 수 있다 —
+      아직 안 했다. 회수 계획은 <a href="#next">§12</a>에 적었다.</p>
+  </div>
 </section>
 
 <!-- ─────────────────────────────────────── -->
@@ -1276,6 +1423,84 @@ float3 normalized = (rgb - kImageNetMean) / kImageNetStd;   <span class="cmt">//
 </section>
 
 <!-- ─────────────────────────────────────── -->
+<section id="reboot">
+  <h2><span class="num">07-3</span>맥을 재부팅시킨 누수</h2>
+  <p class="dek">이 프로젝트에서 가장 비싼 버그. 앱이 죽은 게 아니라 <strong>맥이 재부팅됐다.</strong></p>
+
+  <p>사용자 맥북이 재부팅됐다. 앱은 그 전까지 아무 문제도 보고하지 않았다.
+    남아 있는 것은 커널 패닉 로그 한 줄이었다.</p>
+
+  <pre><code>panic(cpu 2): userspace watchdog timeout: no successful checkins from
+              WindowServer (1 induced crashes) in 120 seconds</code></pre>
+
+  <p>읽는 순서가 중요하다. <strong>커널이 죽은 게 아니다.</strong>
+    화면 합성을 담당하는 <code>WindowServer</code>가 120초 동안 한 번도 체크인하지 못했고,
+    유저스페이스 watchdog이 그것을 "시스템이 응답 불능"으로 판정해 기계를 내렸다.
+    WindowServer를 굶긴 것은 <strong>고갈된 IOSurface</strong>였다.</p>
+
+  <div class="call bad">
+    <span class="lbl">앱은 아무 신호도 주지 않았다</span>
+    <p>크래시도, 경고도, 느려지는 체감도 없었다. 앱이 정상 동작하는 동안 시스템 자원만 조용히 말라갔고,
+      먼저 쓰러진 것은 앱이 아니라 <strong>화면 합성 서버</strong>였다.
+      "앱이 죽으면 알 수 있다"는 전제 자체가 여기서는 성립하지 않는다.</p>
+  </div>
+
+  <h3>원인 — flush를 한 곳도 부르지 않았다</h3>
+  <p><code>CVMetalTextureCache</code>는 만들어 준 텍스처를 <strong>내부에서 계속 붙잡고 있는다.</strong>
+    놓아주라고 말하지 않으면 놓지 않는다. 그 말이 <code>CVMetalTextureCacheFlush</code>인데,
+    코드 어디에도 없었다.</p>
+
+  <pre><code><span class="cmt">// 매 프레임 IOSurface 하나씩 — 30 fps로 45분이면 8만 개다.</span>
+CVMetalTextureCacheCreateTextureFromImage(...)
+<span class="hl">CVMetalTextureCacheFlush(cache, 0)   // ✓ 이 한 줄이 두 곳 다 빠져 있었다</span></code></pre>
+
+  <p>빠진 곳은 <code>CameraCapture</code>와 <code>PersonMatte</code> 둘 다였다.
+    공통점은 <strong>매 프레임 텍스처를 새로 만드는 코드</strong>라는 것이다.</p>
+
+  <h3>원인의 절반은 도구가 아니라 절차였다</h3>
+  <p>이 부분은 정직하게 적는다. 검증이 끝난 뒤 <strong>앱을 종료하지 않고 그대로 두는 습관</strong>이 반복됐다.
+    방치된 인스턴스는 화면을 보지 않아도 프레임을 계속 받고, 계속 IOSurface를 쌓는다.
+    마지막 실행부터 재부팅까지 <strong>약 45분</strong> — 30 fps 누적 속도와 시각이 맞는다.</p>
+  <p>즉 같은 코드라도 "확인하고 바로 종료"였다면 이 사고는 안 났을 가능성이 크다.
+    <strong>버그는 코드에 있었지만 방아쇠는 작업 습관에 있었다.</strong>
+    그래서 수정도 두 방향으로 했다 — 누수를 막는 것과, 누수가 다시 생겨도 시스템까지 끌고 가지 않게 하는 것.</p>
+
+  <h3>조치 네 가지</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>조치</th><th>무엇을 막는가</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td><code>CVMetalTextureCacheFlush(cache, 0)</code> — 두 곳</td><td class="note">누수 자체를 차단. 이것이 진짜 수정이다</td></tr>
+        <tr><td>메모리 감시 — 10초 주기 · 4 GB 한계</td><td class="note">같은 부류의 누수가 다시 생겨도 <strong>앱이 스스로 캡처를 멈춘다.</strong> 앱이 아무 신호 없이 시스템을 죽이는 상황을 두 번 겪지 않기 위해서다</td></tr>
+        <tr><td><code>@Observable</code> 프로퍼티를 <strong>값이 바뀔 때만</strong> 대입</td><td class="note">핀치 상태와 손 인식 여부를 초당 30번 쓰고 있었다. 같은 값이어도 SwiftUI에는 트랜잭션이다 — 그 부하가 AttributeGraph에서 참조카운트 경쟁으로 터졌다</td></tr>
+        <tr><td>Vision 인물 세그멘테이션을 <strong>기본 비활성</strong>(<code>--matte</code>로 켬)</td><td class="note">Espresso 로드 레이스와 SwiftUI 크래시 스택에 반복해서 나타났다</td></tr>
+      </tbody>
+      <caption>세 번째는 <a href="#crash-triage">§07-1 ④</a>에서 "초당 30번 바뀌는 값은 관찰 대상이 아니다"라고 적은 규칙의 마지막 조각이다. 거기서는 Task를 없앴고, 여기서는 <em>같은 값의 대입</em>까지 없앴다.</caption>
+    </table>
+  </div>
+
+  <div class="call">
+    <span class="lbl">세그멘테이션을 끄는 것은 후퇴가 아니라 격리다</span>
+    <p>실루엣 정확도는 분명히 떨어진다. 그래도 <strong>깊이 기반 근사 매트로 파이프라인은 성립한다</strong> —
+      <a href="#raymarch">§05</a>의 두께 프라이어가 person matte를 전제하지만, 근사 매트로도 같은 형태로 동작한다.
+      원인을 프레임워크 내부까지 좁히기 전에는 기본으로 켜지 않는다.
+      <code>--matte</code>는 남겨 뒀다 — <a href="#crash-triage">§07-1</a>에서 그랬듯 이등분 도구로 쓸모가 있다.</p>
+  </div>
+
+  <h3>검증</h3>
+  <div class="call good">
+    <span class="lbl">2분 8초 연속 실행 (M5 · 캡처 30.0 fps · 기본 설정 = 세그멘테이션 OFF)</span>
+    <pre style="margin:.5rem 0 0"><code>크래시     0
+캡처       30 fps 유지
+깊이       23.7 ms
+RSS       324 MB → <span class="hl">131 MB</span>   <span class="cmt">← 증가가 아니라 감소</span></code></pre>
+    <p style="margin-top:.6rem">이전에는 <strong>30~42초</strong>에 조용히 죽었다.
+      메모리가 늘지 않고 오히려 줄어든다는 것이 누수가 막혔다는 직접 증거다 —
+      "안 죽더라"는 증거가 아니다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
 <section id="verify">
   <h2><span class="num">08</span>검증 방법론</h2>
   <p class="dek">"돌아간다"와 "맞다"는 다른 말이다. 이 프로젝트에서 둘을 구분하는 장치들.</p>
@@ -1324,8 +1549,8 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
         <tr class="lead"><td>추론 (30 Hz)</td><td class="n">7.7 ms</td><td class="note">15.4 ms를 두 프레임에 분산</td></tr>
         <tr><td>깊이 안정화</td><td class="n">1.0 ms</td><td class="note">half-res 필터</td></tr>
         <tr><td>업샘플</td><td class="n">1.0 ms</td><td class="note">joint bilateral</td></tr>
-        <tr><td>지오메트리</td><td class="n">0.8 ms</td><td class="note">5-tap 노멀</td></tr>
-        <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res</td></tr>
+        <tr><td>높이장</td><td class="n">0.8 ms</td><td class="note">높이 + 이웃 높이차 노멀</td></tr>
+        <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res 전제. 현재는 출력 해상도라 이 예산을 넘는다(<a href="#next">§12</a>)</td></tr>
         <tr><td>리라이팅 + 레이마칭</td><td class="n">3.0 ms</td><td class="note">half-res, 24스텝</td></tr>
         <tr><td>resolve</td><td class="n">1.0 ms</td><td class="note">시간누적 + 업스케일</td></tr>
         <tr><td><strong>합계</strong></td><td class="n"><strong>16.2 ms</strong></td><td class="note">60 fps에 아슬아슬하게</td></tr>
@@ -1335,17 +1560,22 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   </div>
 
   <div class="call good">
-    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps)</span>
-    <pre style="margin:.5rem 0 0"><code>깊이  23 ms   <span class="cmt">← 실사용 경로 = enc + gpu</span>
-구간  enc 0.3 · gpu 20.6~22.8 · aff 0.0 · flk 4.0~6.4</code></pre>
+    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps · 높이장 재구성 이후)</span>
+    <pre style="margin:.5rem 0 0"><code>gpu   22.6 ~ 24.3 ms   <span class="cmt">← 실사용 경로</span>
+직전  20.6 ~ 22.8 ms   <span class="cmt">(점구름 레이마칭)</span>
+그 전 17.8 ms          <span class="cmt">(구 면광원 이전)</span></code></pre>
     <p style="margin-top:.6rem">위 예산표는 60 fps 목표의 배분이고, 이것은 현재 앱이 실제로 쓰는 시간이다.
-      <code>flk</code>(플리커 측정)는 <code>--autostart</code> 진단에서만 켜지므로
-      실사용 경로는 <strong>gpu + enc ≈ 23 ms</strong>다. 30 fps 예산 33.3 ms 안이다.</p>
-    <p>직전 값은 <strong>17.8 ms</strong>였다(<a href="#profiling">§09-1</a>).
-      늘어난 시간은 낭비가 아니라 <strong>맞바꾼 값</strong>이다 —
+      <code>flk</code>(플리커 측정)는 <code>--autostart</code> 진단에서만 켜지므로 실사용 경로에는 포함되지 않는다.
+      30 fps 예산 33.3 ms 안이다.</p>
+    <p>17.8 → 22.8 ms는 <strong>맞바꾼 값</strong>이었다 —
       구 면광원 · 이중 로브 · 노멀 디테일 텍스처 샘플 2개(<a href="#specular">§06-6</a>).
-      하이라이트가 점에서 면적을 가진 빛이 됐고, 그 값을 GPU가 냈다.
-      60 fps로 되돌려야 한다면 가장 먼저 재검토할 항목이기도 하다.</p>
+      하이라이트가 점에서 면적을 가진 빛이 됐고, 그 값을 GPU가 냈다.</p>
+    <p>그런데 <strong>높이장 재구성(<a href="#heightfield">§06-8</a>)은 더 느려졌다.</strong>
+      스텝당 투영(나눗셈 2회 + 페치 2회 → 페치 1회)을 없앴는데도 그렇다.
+      이유는 같은 커밋에서 <strong>별도 AO 패스를 지우고 AO를 출력 해상도에서 매 픽셀 계산</strong>하게 됐기 때문이다 —
+      half-res 패스였던 것이 2.4 M 픽셀 풀 해상도로 올라갔다. 레이마칭에서 아낀 것을 AO가 도로 먹었다.</p>
+    <p><strong>회수 계획은 정해져 있다</strong> — AO를 높이장 해상도(518×392)로 내린다(<a href="#next">§12</a>).
+      아직 하지 않았으므로 지금 수치는 "최적화 전"이라고 읽는 것이 맞다.</p>
   </div>
 
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
@@ -1787,14 +2017,50 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     같은 판단을 네 번 했다.</p>
   <ul>
     <li><strong>광원 수명</strong>(<a href="#occlusion-bug">§06-3</a>) — 핀치를 놓으면 광원이 사라진다.
-      "잘못된 자리에 남은 광원"이라는 상태 자체가 없어진다.</li>
+      "잘못된 자리에 남은 광원"이라는 상태 자체가 없어진다.
+      <strong>단, 이 항목은 이후 뒤집혔다</strong>(<a href="#heightfield">§06-8</a>) —
+      상태를 없애는 것이 견고하긴 했지만 조명을 놓을 때마다 어두워져 위치 조정 자체가 안 됐다.
+      지금은 광원을 남기고, 대신 <em>그 상태가 나쁜 값을 갖지 못하게</em> 막는다.
+      원칙이 틀렸다기보다 <strong>사용감이 원칙보다 위에 있는 경우가 있다.</strong></li>
     <li><strong>스냅 애니메이션 제거</strong>(<a href="#prediction">§06-5</a>) — 보간하는 동안 광원이 손과 다른 곳에 있는 프레임이 사라진다.</li>
     <li><strong>UI 노브 제거</strong>(<a href="#simplify">§06-7</a>) — 노브가 없으면 잘못 맞춰진 노브도 없다.</li>
     <li><strong>캡처 경로에서 MainActor 제거</strong>(<a href="#crash-triage">§07-1</a>) —
       액터 경쟁을 조율하는 대신 경쟁 자체를 없앴다.</li>
   </ul>
 
-  <h3>4. 검증 도구도 검증해야 한다</h3>
+  <h3>4. 단위를 바꾸면 그에 딸린 상수가 전부 바뀐다</h3>
+  <p>높이를 미터에서 [0,1] 정규화로 옮긴 것은 커널 한 줄이었다.
+    비싼 것은 그 뒤였다 — <strong>미터를 전제로 튜닝해 둔 상수들이 코드 곳곳에 흩어져 있었고</strong>,
+    셋 다 컴파일도 실행도 되면서 화면만 죽였다(<a href="#heightfield">§06-8</a>).</p>
+  <ul>
+    <li><code>thickness</code>·AO 반경 → AO 전 픽셀 포화 → 검은 화면</li>
+    <li>감쇠식 계수 <code>1/(1+6d+12d²)</code> → 거리가 uv가 되자 기여 0 → 또 검은 화면</li>
+    <li>수치 여유가 좁아지며 <code>shadowBias</code> 부재가 표면화 → 평평한 배경에 자기그림자</li>
+  </ul>
+  <p>교훈은 "조심하자"가 아니다. <strong>단위를 바꿀 때는 그 단위가 등장하는 상수를 먼저 전부 세어 본다.</strong>
+    그리고 증상이 "전부 검다"처럼 뭉뚱그려질 때는 항을 하나씩 따로 출력해 본다 —
+    <code>--debug 1~4</code>로 높이장·노멀·AO가 정상임을 확인한 순간 남은 것은 조명 항 하나뿐이었다.
+    <a href="#profiling">§09-1</a>의 이등분과 같은 논리이고, 도구만 시각화였다.</p>
+
+  <h3>5. 읽으면서 쓰지 마라 — 화면에 스레드그룹이 보이면 그 얘기다</h3>
+  <p>세그멘테이션이 꺼져 있을 때 바인딩할 텍스처가 없어서 <code>heightTexture</code>를 폴백으로 꽂았는데,
+    그 커널의 출력도 같은 텍스처였다(<a href="#heightfield">§06-8</a>).
+    결과는 <strong>정확히 16×16 배수의 블록 아티팩트</strong>였다.</p>
+  <p>여기서 배운 것은 진단 규칙이다. <strong>아티팩트의 크기가 컴퓨트 타일 크기와 일치하면
+    원인은 셰이더 수식이 아니라 디스패치 단위의 경쟁이다.</strong>
+    "바인딩할 게 없으니 아무거나"는 <a href="#bugs">§07</a>의 RAW 해저드와 같은 부류의 실수 —
+    <strong>컴파일러가 잡아주지 않는 계약</strong>을 편의로 어긴 것이다.</p>
+
+  <h3>6. 방치된 프로세스가 시스템을 죽인다</h3>
+  <p>가장 비싼 사고는 <strong>맥이 재부팅된 것</strong>이었고(<a href="#reboot">§07-3</a>),
+    앱은 그 전까지 아무 신호도 주지 않았다. 코드의 버그는 <code>CVMetalTextureCacheFlush</code> 누락이었지만,
+    방아쇠는 <strong>검증이 끝난 앱을 종료하지 않고 두는 습관</strong>이었다.
+    보이지 않는 창 뒤에서 30 fps로 45분이면 IOSurface 8만 개다.</p>
+  <p>그래서 고친 것도 둘이다 — 누수를 막는 한 줄과, <strong>누수가 다시 생겨도 시스템까지 끌고 가지 않는 장치</strong>
+    (10초 주기 메모리 감시, 4 GB에서 스스로 캡처 중단). 후자는 버그 수정이 아니라 <em>실패 반경을 줄이는</em> 코드다.
+    앱이 자기 자신만 죽일 수 있게 만드는 것이 이 프로젝트에서 새로 생긴 요구사항이다.</p>
+
+  <h3>7. 검증 도구도 검증해야 한다</h3>
   <p>이 프로젝트에서 <strong>도구가 거짓말한 횟수</strong>가 파이프라인이 틀린 횟수만큼 많았다.</p>
   <ul>
     <li><strong>교차검증 코드가 틀렸다</strong>(<a href="#bugs">§07</a>) — Core ML 출력 <code>Grayscale16Half</code>를
@@ -1808,7 +2074,7 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       검증하지 않은 안전장치는 안전장치가 아니다.</li>
   </ul>
 
-  <h3>5. 경계를 넘으면 자동으로 주던 것이 사라진다</h3>
+  <h3>8. 경계를 넘으면 자동으로 주던 것이 사라진다</h3>
   <p>같은 언어, 같은 리포, 같은 기계인데 <strong>실행 환경이 다르면 있던 것이 없다.</strong>
     세 번 다 컴파일 에러로 먼저 나타났고, 세 번 다 "왜 이게 없지"에서 시작했다.</p>
   <ul>
@@ -1822,7 +2088,7 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       <code>dfdx</code>/<code>dfdy</code>는 쿼드 래스터화에서 나오는 값이라 커널에 없다.</li>
   </ul>
 
-  <h3>6. 컴파일러가 안 잡아주는 계약이 가장 오래 걸린다</h3>
+  <h3>9. 컴파일러가 안 잡아주는 계약이 가장 오래 걸린다</h3>
   <p>타입 시스템 밖에 있는 약속들은 <strong>런타임에 조용히 틀린다.</strong>
     그래서 각각에 장치를 하나씩 붙였다.</p>
   <div class="tw">
@@ -1837,7 +2103,7 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     </table>
   </div>
 
-  <h3>7. 잘한 판단들도 기록해 둔다</h3>
+  <h3>10. 잘한 판단들도 기록해 둔다</h3>
   <p>회고가 실패 목록만 되면 다음에 무엇을 <em>또 해야 하는지</em>를 잃는다.</p>
   <ul>
     <li><strong>추론을 GPU 타임라인에 올린 것</strong>(<a href="#decisions">§03</a>) —
@@ -1861,6 +2127,56 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       <strong>모르는 것을 아는 척하면(추측한 z, 검증 안 한 가설, 검증 안 한 도구) 반드시 되돌아온다.</strong>
       그리고 그 반대편에 <strong>모른다는 것을 코드가 표현할 수 있게 만드는 일</strong>
       (신뢰 못 할 깊이는 안 쓴다, 놓으면 사라진다, 노브는 없앤다)이 있다.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────── -->
+<section id="next">
+  <h2><span class="num">12</span>다음 단계</h2>
+  <p class="dek">순서에는 이유가 있다. 학습이 필요 없는 것부터 소진하고, 학습은 그것으로 안 되는 지점에만 쓴다.</p>
+
+  <h3>학습 없이 되는 것 — 여기부터다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>항목</th><th>효과</th><th>근거</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td>AO를 높이장 해상도로 이동</td><td class="note">~6 ms 회수</td><td class="note">지금 가장 큰 낭비다. 재구성(<a href="#heightfield">§06-8</a>)에서 AO가 출력 해상도 2.4 M 픽셀로 올라갔다. 깊이는 저주파라 518×392로 충분하다는 것은 이미 <a href="#quality">§06-2</a>에서 확인했다</td></tr>
+        <tr><td>레이마칭 계층화 (coarse → fine)</td><td class="note">같은 품질에 스텝 절반</td><td class="note">POM의 표준 기법. 거친 스텝으로 교차 구간을 찾고 그 안에서만 세밀하게 본다</td></tr>
+        <tr><td>높이장 joint bilateral 업샘플</td><td class="note">실루엣 선명 → 그림자 누출 감소</td><td class="note">깊이에 이미 쓰는 방식(<a href="#quality">§06-2</a>)을 높이장에도 적용하는 것</td></tr>
+      </tbody>
+      <caption>셋 다 모델을 건드리지 않는다. 첫 항목만으로 재구성 이전 수준(<a href="#budget">§09</a>)에 근접한다.</caption>
+    </table>
+  </div>
+
+  <h3>도메인 파인튜닝이 실제로 이득인 지점</h3>
+  <p>"모델을 더 좋게"는 대개 게으른 답이다. 그래서 <strong>어디가 부족한지</strong>부터 특정했다.
+    깊이 모델은 웹캠 근접 얼굴에서 <strong>코 · 입술 · 귀의 미세 기복</strong>을 뭉갠다.
+    큰 형태(머리 대 배경)는 잘 맞는데, 조명이 살아나려면 필요한 것은 그 미세 기복 쪽이다.</p>
+
+  <div class="call bad">
+    <span class="lbl">지금 쓰는 우회는 원리적으로 순환이다</span>
+    <p>부족한 디테일을 <strong>루마 고주파</strong>로 흉내 내고 있다(<a href="#specular">§06-6 ④</a>).
+      그런데 루마에는 <em>이미 만들어진 음영</em>이 들어 있다.
+      조명이 만든 그늘을 다시 지오메트리로 읽어 조명에 쓰는 셈이라, 원본 조명이 강할수록 틀린 방향으로 강해진다.
+      튜닝으로 완화는 되지만 한계가 원리에 있다.</p>
+  </div>
+
+  <p>여기서만 학습이 값을 한다. 레시피는 <strong>GT가 필요 없다</strong> —
+    <strong>Depth Pro를 교사로 웹캠 도메인 pseudo-label을 만들고 DAv2-small 448²로 증류</strong>한다.
+    추론 비용은 지금과 같고(같은 아키텍처·같은 입력), 도메인이 "웹캠 앞 상반신"으로 좁으므로
+    더 큰 모델을 가져오는 것보다 대개 이득이다(<a href="#model">§07-2</a>).</p>
+
+  <h3>시간 일관성 — 필요해지면</h3>
+  <p>프레임 간 떨림은 지금 <strong>후처리 필터로 8배</strong> 줄여 놓았다(<a href="#stabilize">§06-4</a>).
+    그것으로 부족해지면 같은 형태의 답이 있다 —
+    <strong>Video Depth Anything을 교사로 시간일관 pseudo-label을 만들어 증류</strong>한다.
+    교사만 무거울 뿐 학생은 그대로이므로 <strong>추론 비용은 변하지 않는다.</strong></p>
+
+  <div class="call cool">
+    <span class="lbl">순서를 지키는 이유</span>
+    <p>위 세 덩어리는 비용이 완전히 다르다. AO 해상도는 한 줄 수준이고, 증류는 데이터 수집부터다.
+      <a href="#budget">§09</a>에 적은 원칙과 같다 — <strong>학습은 마지막 카드다.</strong>
+      그 전에 소진할 것이 남아 있으면, 학습은 문제를 해결하는 게 아니라 가린다.</p>
   </div>
 </section>
 

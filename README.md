@@ -37,9 +37,24 @@ Metal 4 ML 인코더가 ANE보다 26% 빠르고, 무엇보다 **CPU 동기화가
 추론·라이팅·드로우가 하나의 커맨드 버퍼 안에서 GPU 타임라인으로 이어집니다.
 
 앱이 실제로 쓰는 시간은 이와 별개입니다. 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서
-깊이 처리 한 프레임이 **23 ms**입니다(인코딩 0.3 ms · GPU 20.6~22.8 ms).
-직전까지 17.8 ms였고, 늘어난 시간은 피부 하이라이트를 점광원에서 구 면광원으로 바꾸며 치른 값입니다 —
-30 fps 예산 33.3 ms 안입니다.
+한 프레임이 **GPU 22.6~24.3 ms**입니다 — 30 fps 예산 33.3 ms 안입니다.
+직전 점구름 레이마칭은 20.6~22.8 ms였습니다. 높이장으로 바꾸며 스텝당 투영은 사라졌지만,
+같은 변경에서 AO가 출력 해상도(2.4M 픽셀)로 올라가 그 이득을 상쇄했습니다.
+AO를 높이장 해상도(518×392)로 내리면 되찾을 수 있고, 아직 하지 않았습니다.
+
+## 어떻게 동작하나
+
+```
+깊이 추론 → 높이장 재투영 → 높이장 위 조명 → 재구성된 씬 위 레이마칭 (POM 유사)
+```
+
+씬을 3D 점구름이 아니라 **2D 높이장**으로 다룹니다. 그러면 각 픽셀에서 광원으로 향하는 광선이
+**텍스처 공간에서 직선**이라 스텝마다 화면에 재투영할 필요가 없습니다 —
+시차 폐색 매핑(POM)이 쓰는 성질 그대로입니다. 스텝당 나눗셈 2회 + 텍스처 페치 2회가 페치 1회가 됩니다.
+
+노멀도 이웃 높이차로 구하므로 뷰공간 위치를 복원하지 않습니다.
+높이는 uv와 같은 [0,1]로 정규화하고, 실제 종횡비는 `heightToUV` 비율이 따로 들고 있습니다.
+자세한 것은 [파이프라인 해부 §06-8](https://jsonpassion.github.io/Delight/pipeline.html#heightfield)에 있습니다.
 
 ## 구조
 
@@ -47,8 +62,8 @@ Metal 4 ML 인코더가 ANE보다 26% 빠르고, 무엇보다 **CPU 동기화가
 Delight/Delight/  앱 타깃 (Xcode 동기화 폴더)
   App/       엔진 오케스트레이터        Hand/      Vision 핸드포즈, 핀치
   Capture/   AVFoundation → Metal      Sink/      프리뷰 / Syphon / CMIO
-  Depth/     Metal 4 ML · Core ML      Shaders/   .metal
-  Geometry/  언프로젝션, 깊이 안정화     UI/        SwiftUI
+  Depth/     Metal 4 ML · Core ML      Shaders/   .metal (HeightField · Relight)
+  Geometry/  깊이 안정화, 초점거리 추정   UI/        SwiftUI
   Relight/   LightRig, 렌더러
 Tools/       probe · 벤치마크 · 모델 페치
 docs/        리서치 · 아키텍처 문서
@@ -98,6 +113,14 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
   그 조건이 없는 환경에서는 P6(Syphon → OBS) 경로가 그대로 동작합니다
 - [x] **다듬기** 피부 스펙큘러를 구 면광원 + 이중 로브로 · 가려진 관절 판정 · UI 제거(2955 → 2531줄)
   · 캡처 경로에서 MainActor 제거
+- [x] **안정성** `CVMetalTextureCacheFlush` 누락으로 IOSurface가 쌓여 **맥이 재부팅된 사고** 수정 ·
+  메모리 감시(10초 · 4GB) · `@Observable`은 값이 바뀔 때만 · 세그멘테이션 기본 OFF(`--matte`로 켬).
+  2분 8초 연속 실행에서 크래시 0 · RSS 324 → 131MB ·
+  [§07-3](https://jsonpassion.github.io/Delight/pipeline.html#reboot)
+- [x] **재구성** 높이장 아키텍처 — 텍스처 공간 POM 레이마칭(2531 → 2615줄) ·
+  [§06-8](https://jsonpassion.github.io/Delight/pipeline.html#heightfield)
+- [ ] **성능 회수** AO를 높이장 해상도로 이동(~6ms) · 레이마칭 계층화 · 높이장 joint bilateral 업샘플 ·
+  [§12](https://jsonpassion.github.io/Delight/pipeline.html#next)
 
 ## 프라이버시
 
