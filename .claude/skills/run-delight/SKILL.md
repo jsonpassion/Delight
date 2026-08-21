@@ -24,6 +24,20 @@ xcodebuild -downloadComponent MetalToolchain
 open ~/Library/Developer/Xcode/DerivedData/Delight-*/Build/Products/Debug/Delight.app
 ```
 
+## ⚠️ 검증 레이어를 켜고 한 번은 돌릴 것
+
+`open`으로 띄우면 Metal 검증이 꺼져 있어 **잘못된 바인딩이 조용히 지나간다.**
+실제로 `maxTextureBindCount`를 초과한 바인딩이 이 방식에서는 통과하고
+Xcode 실행에서만 `hit program assert`로 드러난 적이 있다.
+
+```bash
+MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 \
+  ~/Library/Developer/Xcode/DerivedData/Delight-*/Build/Products/Debug/Delight.app/Contents/MacOS/Delight
+```
+
+터미널 실행이라 카메라 권한은 없지만, **파이프라인 생성과 인자 바인딩은 검증된다.**
+셰이더나 텍스처를 추가한 뒤에는 반드시 이걸로 한 번 확인한다.
+
 ## 확인 순서
 
 1. 창이 뜨고 **시작**을 누르면 카메라 프리뷰가 나온다 (P1)
