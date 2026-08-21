@@ -17,6 +17,14 @@
 #include "ShaderTypes.h"
 using namespace metal;
 
+constant float kPI = 3.14159265359;
+
+/// 밴딩을 깨는 지터.
+inline float dither(uint2 gid)
+{
+    return fract(52.9829189 * fract(dot(float2(gid), float2(0.06711056, 0.00583715))));
+}
+
 inline float sampleInverse(device const float *depth, constant SunUniforms &u, int2 p)
 {
     p = clamp(p, int2(0), int2(u.depthWidth - 1, u.depthHeight - 1));
@@ -34,6 +42,48 @@ inline float toHeight(float inverseDepth, constant SunUniforms &u)
     float z = 1.0 / max(u.affineA * inverseDepth + u.affineB, 1e-4);
     return saturate((u.farDistance - z) * u.heightScale);
 }
+
+/// 높이장 위 앰비언트 오클루전. 여러 방향으로 짧게 마칭해 하늘이 얼마나 열렸는지 센다.
+/// 턱밑·목·코 옆의 접촉 그늘을 만든다 — 광원과 무관하게 항상 입체감을 올린다.
+kernel void compute_ao_field(texture2d<float, access::sample> heightField [[texture(0)]],
+                             texture2d<float, access::write>  aoOut       [[texture(1)]],
+                             constant SunUniforms            &u           [[buffer(0)]],
+                             uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= u.depthWidth || gid.y >= u.depthHeight) { return; }
+    if (u.enableAO == 0) { aoOut.write(float4(1.0), gid); return; }
+
+    float2 uv = (float2(gid) + 0.5) / float2(u.depthWidth, u.depthHeight);
+    float height = heightField.sample(sampler(filter::linear, address::clamp_to_edge), uv).r;
+
+    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+    // 해상도를 낮춘 이득을 샘플 수로 도로 까먹지 않게 한다.
+    // 8×5(40샘플)로 늘렸더니 이동 이득이 그대로 사라졌다 — 측정으로 확인했다.
+    // AO는 저주파 신호라 4×4에 지터를 섞는 편이 비용 대비 낫다.
+    const uint directions = 4;
+    const uint stepsPerDirection = 4;
+    float reach = u.shadowReach * 0.25;
+    float jitter = dither(gid);
+
+    float occlusion = 0.0;
+    for (uint d = 0; d < directions; ++d) {
+        float angle = (float(d) + jitter) / float(directions) * 2.0 * kPI;
+        float2 direction = float2(cos(angle), sin(angle)) * (reach / float(stepsPerDirection));
+
+        float horizon = 0.0;
+        float2 p = uv;
+        for (uint s = 1; s <= stepsPerDirection; ++s) {
+            p += direction;
+            if (any(p < 0.0) || any(p > 1.0)) { break; }
+            float rise = (heightField.sample(linearSampler, p).r - height) / max(u.heightToUV, 1e-4);
+            // 거리로 나눈 기울기가 곧 지평선 각도다. 가장 높이 솟은 것이 가린다.
+            horizon = max(horizon, rise / (float(s) * reach / float(stepsPerDirection)));
+        }
+        occlusion += saturate(horizon);
+    }
+    aoOut.write(float4(saturate(1.0 - occlusion / float(directions) * u.aoStrength)), gid);
+}
+
 
 /// 깊이 텐서 → 높이장 + 노멀 + 피사체 마스크.
 ///
