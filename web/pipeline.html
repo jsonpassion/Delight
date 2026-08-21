@@ -195,7 +195,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
   <p class="dek" style="max-width:44rem">한 프레임이 지나가는 길. 추론 출력이 GPU 메모리를 떠나지 않는 것이 핵심이다.</p>
 
   <figure>
-    <svg viewBox="0 0 940 360" role="img" aria-label="카메라 프레임이 전처리, ML 추론, 깊이 안정화, 지오메트리 복원, 리라이팅을 거쳐 출력 싱크로 나가는 흐름. 추론 출력 텐서의 MTLBuffer를 다음 컴퓨트 스테이지가 직접 읽으며 CPU 왕복이 없다.">
+    <svg viewBox="0 0 940 360" role="img" aria-label="카메라 프레임이 전처리, ML 추론, 깊이 안정화, 높이장 재투영, 앰비언트 오클루전, 리라이팅을 거쳐 출력 싱크로 나가는 흐름. 여섯 스테이지가 하나의 커맨드 버퍼 안에 있고, 추론 출력 텐서의 MTLBuffer를 다음 컴퓨트 스테이지가 직접 읽으며 CPU 왕복이 없다.">
       <defs>
         <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
@@ -212,47 +212,43 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
       <rect x="142" y="58" width="700" height="196" rx="4" fill="none" stroke="currentColor" stroke-dasharray="3 3" opacity=".4"/>
       <text x="154" y="50" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="currentColor">단일 MTL4CommandBuffer — CPU 동기화 0회</text>
 
-      <rect x="158" y="128" width="92" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="204" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C0</text>
-      <text x="204" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">전처리</text>
-      <line x1="250" y1="156" x2="278" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-
-      <rect x="280" y="120" width="126" height="72" rx="3" fill="none" stroke="var(--key)" stroke-width="2"/>
-      <text x="343" y="143" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" font-weight="600" fill="var(--key)">ML encoder</text>
-      <text x="343" y="159" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="var(--key)">dispatchNetwork</text>
-      <text x="343" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" font-weight="600" fill="var(--key)">15.4 ms</text>
-
-      <line x1="406" y1="156" x2="448" y2="156" stroke="var(--key)" stroke-width="2" marker-end="url(#a2)"/>
-      <text x="427" y="144" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">MTLBuffer</text>
-      <text x="427" y="174" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">그대로</text>
-
-      <rect x="450" y="128" width="96" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="498" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C1·C2</text>
-      <text x="498" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">안정화·업샘플</text>
-      <line x1="546" y1="156" x2="574" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-
-      <rect x="576" y="128" width="96" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="624" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C3</text>
-      <text x="624" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">높이장·노멀</text>
-      <line x1="672" y1="156" x2="700" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
-
-      <rect x="702" y="128" width="102" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
-      <text x="753" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C5</text>
-      <text x="753" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">레이마칭·조명</text>
-
-      <line x1="842" y1="156" x2="874" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <rect x="150" y="128" width="76" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="188" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C0</text>
+      <text x="188" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">전처리</text>
+      <line x1="226" y1="156" x2="244" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <rect x="246" y="120" width="118" height="72" rx="3" fill="none" stroke="var(--key)" stroke-width="2"/>
+      <text x="305" y="143" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" font-weight="600" fill="var(--key)">ML encoder</text>
+      <text x="305" y="159" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="var(--key)">dispatchNetwork</text>
+      <text x="305" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" font-weight="600" fill="var(--key)">15.4 ms</text>
+      <line x1="364" y1="156" x2="392" y2="156" stroke="var(--key)" stroke-width="2" marker-end="url(#a2)"/>
+      <text x="378" y="144" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">MTLBuffer</text>
+      <text x="378" y="174" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="var(--key)">그대로</text>
+      <rect x="394" y="128" width="88" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="438" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C1</text>
+      <text x="438" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">안정화</text>
+      <line x1="482" y1="156" x2="500" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <rect x="502" y="128" width="88" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="546" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C3</text>
+      <text x="546" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">높이장·노멀</text>
+      <line x1="590" y1="156" x2="608" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <rect x="610" y="128" width="88" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="654" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C4</text>
+      <text x="654" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">AO · 저해상도</text>
+      <line x1="698" y1="156" x2="716" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+      <rect x="718" y="128" width="112" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <text x="774" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="currentColor">C5</text>
+      <text x="774" y="165" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".62">레이마칭·조명</text>
+      <line x1="830" y1="156" x2="874" y2="156" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
       <text x="900" y="153" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="currentColor">Sink</text>
 
-      <text x="343" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">30 Hz</text>
-      <text x="640" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">60 Hz</text>
-      <line x1="280" y1="232" x2="406" y2="232" stroke="currentColor" opacity=".3"/>
-      <line x1="450" y1="232" x2="804" y2="232" stroke="currentColor" opacity=".3"/>
+      <text x="492" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="currentColor" opacity=".6">C0 → C5 한 커맨드 버퍼 · 캡처 프레임당 1회</text>
+      <line x1="150" y1="232" x2="830" y2="232" stroke="currentColor" opacity=".3"/>
 
-      <text x="6" y="292" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C0 전처리(0-255 RGB · NCHW · 행패딩) · ML 추론 · C1 affine 정합+시간필터 · C2 joint bilateral 업샘플</text>
-      <text x="6" y="310" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C3 높이장 재투영(높이+노멀+마스크) · C5 텍스처공간 레이마칭 그림자+AO+delta lighting+역광</text>
-      <text x="6" y="328" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">Sink = 프리뷰 / Syphon→OBS / CMIO Camera Extension</text>
+      <text x="6" y="292" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C0 전처리(0-255 RGB · NCHW · 행패딩) · ML 추론 · C1 안정화(edge-stopping 시간필터 · 배경 앵커 affine 정합)</text>
+      <text x="6" y="310" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">C3 높이장 재투영(높이+노멀+마스크) · C4 AO(높이장 해상도 518×392) · C5 텍스처공간 레이마칭 그림자+delta lighting+역광</text>
+      <text x="6" y="328" font-family="IBM Plex Mono,monospace" font-size="10" fill="currentColor" opacity=".62">Sink = 프리뷰(60 Hz 제시) / Syphon→OBS / CMIO Camera Extension   ·   C2는 비어 있다 — 깊이 시각화 패스를 지웠다</text>
     </svg>
-    <figcaption>추론 출력 텐서의 백킹 버퍼를 다음 컴퓨트 스테이지가 그대로 읽는다. 포맷 변환도, CPU 왕복도, 인터롭 동기화도 없다. 깊이는 30 Hz, 렌더는 60 Hz로 분리해 추론 비용을 두 프레임에 나눈다.</figcaption>
+    <figcaption>추론 출력 텐서의 백킹 버퍼를 다음 컴퓨트 스테이지가 그대로 읽는다. 포맷 변환도, CPU 왕복도, 인터롭 동기화도 없다. C0부터 C5까지가 한 커맨드 버퍼 안에서 캡처 프레임마다 한 번 돌고, 프리뷰는 그 결과를 60 Hz로 제시한다. 추론이 도는 중에 들어온 캡처 프레임은 큐에 쌓지 않고 버린다.</figcaption>
   </figure>
 
   <div class="tw" style="max-width:44rem">
@@ -261,12 +257,12 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
       <tbody>
         <tr><td>C0 전처리</td><td>BGRA 텍스처 → f32 NCHW 텐서</td><td class="n">~0.2 ms</td><td class="note">모델은 518×392 고정. stretch로 맞춘다(DAv2가 그렇게 학습됨)</td></tr>
         <tr class="lead"><td>ML 추론</td><td>텐서 → 역깊이 텐서</td><td class="n">15.4 ms</td><td class="note">전체 비용의 98%. 여기가 예산의 전부다</td></tr>
-        <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정</td></tr>
-        <tr><td>C2 업샘플</td><td>518×392 → 출력 해상도</td><td class="n">~1.0 ms</td><td class="note">bilinear면 실루엣이 뭉개져 그림자가 얼굴 밖으로 샌다</td></tr>
+        <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정(<a href="#stabilize">§06-4</a>)</td></tr>
         <tr><td>C3 높이장</td><td>깊이 → 높이·노멀·마스크</td><td class="n">~0.8 ms</td><td class="note">노멀은 이웃 높이차로 구한다. 뷰공간 위치 복원이 없다(<a href="#heightfield">§06-8</a>)</td></tr>
-        <tr><td>C5 리라이팅</td><td>높이·노멀·원본 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">텍스처 공간 레이마칭 + AO + 확산 + 스펙큘러 + 역광. 별도 AO 패스(C4)는 여기로 합쳐졌다</td></tr>
+        <tr><td>C4 AO</td><td>높이장 → AO (518×392)</td><td class="n">—</td><td class="note">높이장 해상도의 전용 커널. 4방향×4스텝. 출력 해상도에서 돌던 것을 내렸다(<a href="#heightfield">§06-8</a>)</td></tr>
+        <tr><td>C5 리라이팅</td><td>높이·노멀·AO·원본 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">텍스처 공간 레이마칭 + 확산 + 스펙큘러 + 역광. AO는 C4 결과를 샘플만 한다</td></tr>
       </tbody>
-      <caption>비용은 M5 기준 추정(추론만 실측). ML 15.4 ms가 압도적이므로, 최적화 노력은 전부 그쪽에 걸어야 한다 — 나머지를 다 합쳐도 절반이 안 된다.</caption>
+      <caption>스테이지 번호는 코드 주석(<code>[C0]</code>…<code>[C5]</code>)과 같다. C2가 비어 있는 것은 깊이 시각화 패스를 지웠기 때문이고(<a href="#simplify">§06-7</a>), 예정된 joint bilateral 업샘플은 아직 없다(<a href="#next">§12</a>) — 지금은 C5가 높이장을 bilinear로 읽는다. 개별 비용은 M5 기준 추정이고 실측은 추론과 프레임 전체(<a href="#budget">§09</a>)뿐이다. ML 15.4 ms가 압도적이므로 최적화 노력은 전부 그쪽에 걸어야 한다.</caption>
     </table>
   </div>
 </section>
@@ -495,8 +491,12 @@ accumulated      += scatter * thinness * matte * translucency * lightColor;</cod
   <p>가장 작지만 체감이 가장 큰 항목이다. 광원을 나타내는 빛무리를 그릴 때 씬 깊이와 비교해서,
     머리보다 멀면 그리지 않는다. 손으로 조명을 얼굴 뒤로 넘기면 <strong>빛무리가 머리 뒤로 사라진다.</strong>
     이 한 장면이 "이게 진짜 3D 공간에서 계산되고 있다"를 말없이 증명한다.</p>
-  <pre><code>bool visible = (light.position.z &lt; sceneZ + bias) || sceneZ &lt;= 1e-4;
+  <pre><code><span class="cmt">// 당시 구현 — 뷰공간 sceneZ와 광원 z를 통째로 비교했다(지금은 아래 참조)</span>
+bool visible = (light.position.z &lt; sceneZ + bias) || sceneZ &lt;= 1e-4;
 if (visible) glow += exp(-d*d*900.0) * lightColor * intensity;</code></pre>
+  <p>판정 방식은 그 뒤 두 번 바뀌었다. 높이장으로 옮기면서 비교 대상이 뷰공간 z에서 <strong>정규화 높이</strong>가 됐고
+    (<a href="#heightfield">§06-8</a>), 이어서 <strong>픽셀별 <code>smoothstep</code></strong>으로 바뀌었다 —
+    광원 중심 하나만 보면 손 경계에서 빛무리가 딱 잘린다. 원리는 그대로다.</p>
 
   <div class="call good">
     <span class="lbl">공짜로 얻는 것</span>
@@ -955,7 +955,7 @@ n = normalize(n);</code></pre>
       <tbody>
         <tr><td>ControlPanel (슬라이더 12개)</td><td class="note">튜닝이 끝난 값은 상수여야 한다. 노브가 없으면 잘못 맞춰진 노브도 없다</td></tr>
         <tr><td>SettingsView</td><td class="note">남은 설정이 없다</td></tr>
-        <tr><td>깊이 좌우분할 보기 · 반전 토글</td><td class="note">개발자용 진단. 셰이더의 <code>composite_split</code> · <code>blit_source</code> · <code>visualize_depth</code> 커널까지 같이 지웠다</td></tr>
+        <tr><td>깊이 좌우분할 보기 · 반전 토글</td><td class="note">개발자용 진단. 프리뷰 합성 커널 <code>composite_split</code>도 같이 지웠다(미러링은 <code>present_mirrored</code> 하나로 남았다). <code>visualize_depth</code> · <code>blit_source</code>는 <code>Visualize.metal</code>에 쓰이지 않는 채로 남아 있다</td></tr>
         <tr><td>입력모드(손/마우스) 토글</td><td class="note">고를 이유가 없다 — 마우스 드래그는 <strong>토글 없이 항상 동작한다</strong></td></tr>
         <tr class="lead"><td>남은 UI</td><td class="note">시작 버튼 · 송출 토글 · 지금 조명을 잡고 있는지 알려주는 한 줄</td></tr>
       </tbody>
@@ -979,7 +979,7 @@ n = normalize(n);</code></pre>
 <!-- ─────────────────────────────────────── -->
 <section id="heightfield" class="wide">
   <h2><span class="num">06-8</span>높이장으로 다시 짓다</h2>
-  <p class="dek" style="max-width:44rem">같은 그림자를, 광선이 직선으로 가는 공간에서 계산한다. 투영이 통째로 사라졌다. 코드 2531 → 2615줄.</p>
+  <p class="dek" style="max-width:44rem">같은 그림자를, 광선이 직선으로 가는 공간에서 계산한다. 투영이 통째로 사라졌다. 코드 2531 → 2615줄. 그리고 그 이득을 먹어치운 AO를 다시 제자리로 돌렸다 — gpu 최저 16.7 ms.</p>
 
   <p>이 아이디어의 원 저자가 공개한 구조는 네 단계였다.</p>
 
@@ -1020,9 +1020,10 @@ float h = farDistance - z;
 <span class="cmt">// ✓ uv와 같은 [0,1]에 둔다. 실제 종횡비는 heightToUV가 따로 들고 있는다.</span>
 <span class="hl">float h = saturate((farDistance - z) * heightScale);</span></code></pre>
 
-  <h3>단위를 바꾸면 그에 딸린 상수가 전부 바뀐다 — 세 번 검은 화면을 만들었다</h3>
+  <h3>검은 화면으로 가는 네 가지 경로 — 셋은 단위, 하나는 상한</h3>
   <p>커널 구조를 바꾸는 것보다 <strong>미터를 전제로 튜닝해 둔 상수들</strong>을 찾아내는 쪽이 오래 걸렸다.
-    셋 다 컴파일도 되고 실행도 됐다. 화면만 죽었다.</p>
+    셋 다 컴파일도 되고 실행도 됐다. 화면만 죽었다.
+    넷째는 나중에, 단위와 무관한 이유로 났다 — 아래 <a href="#heightfield">광원 가림</a> 절에서 나온다.</p>
 
   <div class="bugs">
     <div class="bug">
@@ -1046,6 +1047,16 @@ float h = farDistance - z;
       <p>광선이 출발한 표면 자신이 첫 스텝에서 가림물로 잡힌다.
         높이가 [0,1]로 좁아지면서 수치 여유가 함께 줄어든 것이 표면화한 계기였다.</p>
       <p class="fix">→ <code>shadowBias &lt; delta &lt; thickness</code>로 하한을 넣었다. <a href="#raymarch">§05</a>의 두께 창에 바닥이 하나 더 생긴 셈이다.</p>
+    </div>
+    <div class="bug">
+      <div class="sym">넷째 검은 화면 — 앞면이 통째로 그림자. AO·높이장·노멀은 전부 정상</div>
+      <h4>④ 광원 높이 상한을 0.82로 잡았다</h4>
+      <p>단위가 아니라 <strong>상한</strong>이 원인이었다. 웹캠 앞 사람의 정규화 높이는 약 0.9다.
+        상한을 0.82로 두면 광원이 <strong>항상 피사체 뒤</strong>에 놓이고, 앞면은 전 픽셀이 그림자가 된다.
+        조명이 계산되지 않은 것이 아니라 <em>정확히 계산된 결과</em>가 검은 화면이었다.</p>
+      <p class="fix">→ <code>--debug 2</code>로 AO가 정상임을 먼저 확인하고 조명 항으로 좁혔다.
+        상한은 0.97 — 손이 지나갈 여유는 남기되 피사체보다는 확실히 앞이다.
+        아래 <a href="#heightfield">광원 가림</a> 절의 부산물이다.</p>
     </div>
   </div>
 
@@ -1091,12 +1102,89 @@ float h = farDistance - z;
   </ul>
 
   <div class="call bad" style="max-width:44rem">
-    <span class="lbl">정직하게 — 이 재구성은 아직 느리다</span>
-    <p>측정값은 <strong>gpu 22.6~24.3 ms</strong>다. POM 이전(<a href="#budget">§09</a>의 16.2 ms 예산 배분)보다 <strong>느리다.</strong>
+    <span class="lbl">정직하게 — 재구성 직후에는 더 느렸다</span>
+    <p>재구성 직후 측정값은 <strong>gpu 22.6~24.3 ms</strong>였다. POM 이전(<a href="#budget">§09</a>의 16.2 ms 예산 배분)보다 <strong>느리다.</strong>
       스텝당 투영은 없앴지만, 별도 AO 패스를 지우면서 <strong>AO를 출력 해상도(2.4 M 픽셀)에서 매 픽셀 계산</strong>하는
       구조가 됐고 그 비용이 이득을 상쇄했다.</p>
-    <p>AO를 높이장 해상도(518×392)로 내리면 되찾을 수 있다 —
-      아직 안 했다. 회수 계획은 <a href="#next">§12</a>에 적었다.</p>
+    <p>그래서 AO를 높이장 해상도로 되돌렸다 — 바로 아래 절이다.</p>
+  </div>
+
+  <h3>AO를 높이장 해상도로 — 옮기는 것만으로는 부족했다</h3>
+  <p>AO는 광원과 무관한 저주파 신호다. 출력 해상도(1552×1552 = <strong>2.4 M 픽셀</strong>)에서 매 픽셀
+    방향×스텝을 돌 이유가 없다. 리라이팅 커널 안의 인라인 함수였던 것을
+    높이장 해상도(518×392 = <strong>203 K 픽셀</strong>)의 전용 커널 <code>compute_ao_field</code>로 뺐고,
+    리라이팅은 그 결과를 <strong>샘플만</strong> 한다. 파이프라인에 <code>[C4]</code> 스테이지가 하나 늘었다(<a href="#stages">§02</a>).</p>
+
+  <p>그런데 <strong>옮기는 것만으로는 이득이 나오지 않았다.</strong>
+    옮기면서 "저해상도니 샘플을 더 써도 싸다"고 방향×스텝을 함께 늘렸기 때문이다.</p>
+
+  <pre style="max-width:44rem"><code><span class="cmt">// 출력 해상도에서 돌던 시절 — 픽셀이 비싸니 샘플을 아꼈다</span>
+const uint directions = 4;
+const uint stepsPerDirection = 3;
+
+<span class="cmt">// ✗ 높이장 해상도로 옮기면서 늘렸다 → gpu 24~32 ms. 이동 이득이 그대로 사라졌다</span>
+const uint directions = 8;
+const uint stepsPerDirection = 5;
+
+<span class="cmt">// ✓ 되돌렸다. AO는 저주파라 4×4에 지터를 섞는 편이 비용 대비 낫다</span>
+<span class="hl">const uint directions = 4;</span>
+<span class="hl">const uint stepsPerDirection = 4;</span></code></pre>
+
+  <div class="call good" style="max-width:44rem">
+    <span class="lbl">실측 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps)</span>
+    <pre style="margin:.5rem 0 0"><code>지금  gpu 평균 <span class="hl">22.1 ms</span>  최저 16.7  범위 16.7~31.1
+직전  gpu      22.6 ~ 24.3 ms   <span class="cmt">(AO가 출력 해상도에 있던 재구성 직후)</span>
+경유  gpu      24 ~ 32 ms       <span class="cmt">(옮기면서 8방향×5스텝으로 늘렸을 때)</span></code></pre>
+    <p style="margin-top:.6rem">직전 범위(22.6~24.3 ms) 아래로 내려왔고, 좋은 프레임은 <strong>16.7 ms</strong>까지 떨어진다 —
+      60 fps 예산과 같은 값이다. 범위 상단이 31.1 ms로 넓은 것은
+      <a href="#profiling">§09-1</a>에서 확인한 콜드 스타트 구간을 포함하기 때문이다.</p>
+  </div>
+
+  <div class="call" style="max-width:44rem">
+    <span class="lbl">전형적인 패턴이다</span>
+    <p><strong>해상도를 낮춰 번 것을 샘플 수로 도로 까먹는다.</strong>
+      "싸졌으니 품질을 올리자"는 판단은 자연스럽고, 그래서 이동의 이득이 있었는지조차 알 수 없게 만든다.
+      한 번에 두 가지를 바꾸면 측정이 답을 주지 못한다 —
+      <strong>먼저 옮기고 재고, 그다음에 늘릴지 정한다.</strong></p>
+  </div>
+
+  <h3>놓아둔 광원을 손으로 가릴 수 없었다</h3>
+  <p>기대하는 동작은 이렇다. 핀치를 놓아 광원이 그 자리에 남은 뒤(<a href="#occlusion-bug">§06-3</a>),
+    그 앞을 손으로 가리면 <strong>빛무리는 사라지고 조명 효과는 남는다.</strong>
+    손으로 전구를 가려도 방은 여전히 밝은 것과 같다. 그게 되지 않았다 —
+    무슨 짓을 해도 빛무리가 손 위에 그대로 떠 있었다.</p>
+
+  <p>원인은 조명 모델이 아니라 <strong>상한</strong>이었다. 광원 높이가 <code>1.0</code>에 붙어 있었다.
+    손을 앞으로 내밀면 <code>handHeight</code>가 1.0에 saturate되고 광원도 1.0이 된다.
+    그러면 <strong>그 뒤로는 어떤 손도 광원보다 앞에 올 수 없다.</strong>
+    가림 판정은 정상이었고, 판정이 참이 될 수 있는 값의 범위가 없었던 것이다.</p>
+
+  <p>수정은 둘이다. 하나는 <strong>상한을 0.97로 내려 손이 지나갈 여유를 남기는 것</strong>이고
+    (0.82로 잡았다가 넷째 검은 화면을 만들었다 — 위 <code>④</code>),
+    다른 하나는 <strong>글로우 판정을 픽셀별로 바꾸는 것</strong>이다.
+    광원 중심 하나만 보면 손 경계에서 빛무리가 딱 잘린다.
+    픽셀마다 그 자리 높이와 비교하면 손 윤곽을 따라 부드럽게 잘린다.</p>
+
+  <pre style="max-width:44rem"><code>float halo = exp(-dot(delta, delta) * 900.0);
+if (halo &gt; 0.002) {
+    <span class="cmt">// 이 픽셀이 광원보다 카메라 쪽에 있으면 광원을 가린 것이다</span>
+    <span class="hl">float occluded = smoothstep(light.position.z,
+                                light.position.z + u.shadowBias * 4.0,
+                                height);</span>
+    glow += halo * (1.0 - occluded) * light.color * light.intensity * 0.9;
+}</code></pre>
+
+  <p>중요한 것은 <strong>지우는 대상이 <code>glow</code>뿐</strong>이라는 점이다.
+    조명 기여(<code>accumulated</code>)는 건드리지 않는다. 손이 광원을 가리는 것은
+    <em>광원이 안 보이는 것</em>이지 <em>빛이 꺼지는 것</em>이 아니다.
+    두 항을 같이 지우면 손을 들 때마다 화면이 어두워진다.</p>
+
+  <div class="call cool" style="max-width:44rem">
+    <span class="lbl">같은 값이 두 가지 실패를 만든다</span>
+    <p>광원 높이 상한 하나가 위로 붙으면 <strong>가릴 수 없는 광원</strong>이 되고,
+      아래로 내려가면 <strong>앞면이 전부 그림자</strong>가 된다.
+      <a href="#raymarch">§05</a>의 <code>thickness</code>와 같은 부류다 — 양쪽 극단이 모두 실패인 파라미터는
+      "적당히"가 아니라 <strong>무엇에 대해 위이고 아래인지</strong>(여기서는 손과 피사체)를 기준으로 잡아야 한다.</p>
   </div>
 </section>
 
@@ -1548,9 +1636,9 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
         <tr><td>전처리</td><td class="n">0.2 ms</td><td class="note">리샘플 + 텐서 쓰기</td></tr>
         <tr class="lead"><td>추론 (30 Hz)</td><td class="n">7.7 ms</td><td class="note">15.4 ms를 두 프레임에 분산</td></tr>
         <tr><td>깊이 안정화</td><td class="n">1.0 ms</td><td class="note">half-res 필터</td></tr>
-        <tr><td>업샘플</td><td class="n">1.0 ms</td><td class="note">joint bilateral</td></tr>
+        <tr><td>업샘플</td><td class="n">1.0 ms</td><td class="note">joint bilateral — <strong>아직 없다.</strong> 지금은 리라이팅이 높이장을 bilinear로 읽는다(<a href="#next">§12</a>)</td></tr>
         <tr><td>높이장</td><td class="n">0.8 ms</td><td class="note">높이 + 이웃 높이차 노멀</td></tr>
-        <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res 전제. 현재는 출력 해상도라 이 예산을 넘는다(<a href="#next">§12</a>)</td></tr>
+        <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res 전제. 높이장 해상도(518×392)의 전용 커널 <code>compute_ao_field</code>로 내려왔다 — 출력 해상도에서 돌던 구조는 이 예산을 넘었다(<a href="#heightfield">§06-8</a>)</td></tr>
         <tr><td>리라이팅 + 레이마칭</td><td class="n">3.0 ms</td><td class="note">half-res, 24스텝</td></tr>
         <tr><td>resolve</td><td class="n">1.0 ms</td><td class="note">시간누적 + 업스케일</td></tr>
         <tr><td><strong>합계</strong></td><td class="n"><strong>16.2 ms</strong></td><td class="note">60 fps에 아슬아슬하게</td></tr>
@@ -1560,9 +1648,10 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   </div>
 
   <div class="call good">
-    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps · 높이장 재구성 이후)</span>
-    <pre style="margin:.5rem 0 0"><code>gpu   22.6 ~ 24.3 ms   <span class="cmt">← 실사용 경로</span>
-직전  20.6 ~ 22.8 ms   <span class="cmt">(점구름 레이마칭)</span>
+    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps · AO를 높이장 해상도로 내린 뒤)</span>
+    <pre style="margin:.5rem 0 0"><code>gpu   평균 <span class="hl">22.1 ms</span>  최저 16.7  범위 16.7 ~ 31.1   <span class="cmt">← 실사용 경로</span>
+직전  22.6 ~ 24.3 ms   <span class="cmt">(AO가 출력 해상도에 있던 높이장 재구성 직후)</span>
+그 전 20.6 ~ 22.8 ms   <span class="cmt">(점구름 레이마칭)</span>
 그 전 17.8 ms          <span class="cmt">(구 면광원 이전)</span></code></pre>
     <p style="margin-top:.6rem">위 예산표는 60 fps 목표의 배분이고, 이것은 현재 앱이 실제로 쓰는 시간이다.
       <code>flk</code>(플리커 측정)는 <code>--autostart</code> 진단에서만 켜지므로 실사용 경로에는 포함되지 않는다.
@@ -1570,12 +1659,12 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
     <p>17.8 → 22.8 ms는 <strong>맞바꾼 값</strong>이었다 —
       구 면광원 · 이중 로브 · 노멀 디테일 텍스처 샘플 2개(<a href="#specular">§06-6</a>).
       하이라이트가 점에서 면적을 가진 빛이 됐고, 그 값을 GPU가 냈다.</p>
-    <p>그런데 <strong>높이장 재구성(<a href="#heightfield">§06-8</a>)은 더 느려졌다.</strong>
-      스텝당 투영(나눗셈 2회 + 페치 2회 → 페치 1회)을 없앴는데도 그렇다.
-      이유는 같은 커밋에서 <strong>별도 AO 패스를 지우고 AO를 출력 해상도에서 매 픽셀 계산</strong>하게 됐기 때문이다 —
-      half-res 패스였던 것이 2.4 M 픽셀 풀 해상도로 올라갔다. 레이마칭에서 아낀 것을 AO가 도로 먹었다.</p>
-    <p><strong>회수 계획은 정해져 있다</strong> — AO를 높이장 해상도(518×392)로 내린다(<a href="#next">§12</a>).
-      아직 하지 않았으므로 지금 수치는 "최적화 전"이라고 읽는 것이 맞다.</p>
+    <p>높이장 재구성(<a href="#heightfield">§06-8</a>)은 스텝당 투영을 없애고도 <strong>더 느려졌다.</strong>
+      같은 커밋에서 별도 AO 패스를 지우고 AO를 출력 해상도(2.4 M 픽셀)에서 매 픽셀 계산하게 됐기 때문이다.
+      그 AO를 <strong>높이장 해상도의 전용 커널로 되돌려</strong> 평균 22.1 ms · 최저 16.7 ms가 됐다 —
+      좋은 프레임은 60 fps 예산(16.7 ms)과 같은 값까지 떨어진다.</p>
+    <p>범위 상단 31.1 ms는 <a href="#profiling">§09-1</a>에서 확인한 <strong>콜드 스타트</strong> 구간을 포함한 값이다.
+      남은 회수 항목(레이마칭 계층화 · joint bilateral 업샘플)은 <a href="#next">§12</a>에 있다.</p>
   </div>
 
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
@@ -1796,7 +1885,8 @@ addObserver:... name:<span class="hl">@"info.v002.Syphon.ServerAnnounce"</span><
   <p>프리뷰는 좌우 반전이다 — 사용자가 거울에 익숙하기 때문이다(<a href="#pinch">§06-1</a>).
     그런데 <strong>상대방이 보는 영상은 비반전이 정석이다.</strong> 반전은 어디까지나 프리뷰 전용이다.</p>
   <p>이 구분이 <code>FrameSink</code> 경계에서 자연히 지켜진다. 미러는
-    <code>composite_split</code> 커널, 즉 <strong>프리뷰 경로 안에만</strong> 있고,
+    프리뷰 커널(당시 <code>composite_split</code>, 지금은 <code>present_mirrored</code>),
+    즉 <strong>프리뷰 경로 안에만</strong> 있고,
     <code>SyphonSink.submit</code>은 <strong>원본 텍스처를 그대로</strong> 넘긴다.
     송출 쪽에서 뒤집지 않기로 결정한 것이 아니라, 뒤집는 코드가 애초에 그 경로에 없다.
     싱크 추상화가 정책을 대신 강제하는 셈이다.</p>
@@ -1987,6 +2077,10 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       통합 메모리라 15.1~15.6 ms로 <strong>차이가 없었다</strong>. 겁먹고 안 했으면 핀치 z를 못 얻었다.</li>
     <li><strong>해상도를 31% 올렸는데 빨라졌다</strong>(<a href="#quality">§06-2</a> · <a href="#profiling">§09-1</a>) —
       1:1 페치로 리샘플이 사라지고 CPU 후처리 2.5 ms가 빠진 효과가 픽셀 증가보다 컸다.</li>
+    <li><strong>AO를 저해상도로 옮기며 샘플도 늘렸다</strong>(<a href="#heightfield">§06-8</a>) —
+      "싸졌으니 품질을 올리자"가 자연스러워서 4방향×3스텝을 8×5로 함께 바꿨다.
+      결과는 gpu 24~32 ms, <strong>이동 이득이 통째로 사라졌다</strong>. 4×4로 되돌려 평균 22.1 ms · 최저 16.7 ms를 회수했다.
+      한 번에 두 가지를 바꾸면 측정이 답을 주지 못한다 — <strong>먼저 옮기고 재고, 그다음에 늘릴지 정한다.</strong></li>
   </ul>
   <p>공통 교훈은 순서에 있다. <strong>가설을 세우기 전에 계측을 쪼갠다.</strong>
     전체 시간 하나만 보고 있으면 그럴듯한 가설을 반증할 방법이 없고,
@@ -2036,6 +2130,7 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     <li><code>thickness</code>·AO 반경 → AO 전 픽셀 포화 → 검은 화면</li>
     <li>감쇠식 계수 <code>1/(1+6d+12d²)</code> → 거리가 uv가 되자 기여 0 → 또 검은 화면</li>
     <li>수치 여유가 좁아지며 <code>shadowBias</code> 부재가 표면화 → 평평한 배경에 자기그림자</li>
+    <li>(나중에) 광원 높이 상한 0.82 → 광원이 늘 피사체 뒤 → 앞면이 전부 그림자. 단위가 아니라 <strong>상한</strong>이 원인인 넷째 경로였다</li>
   </ul>
   <p>교훈은 "조심하자"가 아니다. <strong>단위를 바꿀 때는 그 단위가 등장하는 상수를 먼저 전부 세어 본다.</strong>
     그리고 증상이 "전부 검다"처럼 뭉뚱그려질 때는 항을 하나씩 따로 출력해 본다 —
@@ -2140,11 +2235,11 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     <table>
       <thead><tr><th>항목</th><th>효과</th><th>근거</th></tr></thead>
       <tbody>
-        <tr class="lead"><td>AO를 높이장 해상도로 이동</td><td class="note">~6 ms 회수</td><td class="note">지금 가장 큰 낭비다. 재구성(<a href="#heightfield">§06-8</a>)에서 AO가 출력 해상도 2.4 M 픽셀로 올라갔다. 깊이는 저주파라 518×392로 충분하다는 것은 이미 <a href="#quality">§06-2</a>에서 확인했다</td></tr>
-        <tr><td>레이마칭 계층화 (coarse → fine)</td><td class="note">같은 품질에 스텝 절반</td><td class="note">POM의 표준 기법. 거친 스텝으로 교차 구간을 찾고 그 안에서만 세밀하게 본다</td></tr>
-        <tr><td>높이장 joint bilateral 업샘플</td><td class="note">실루엣 선명 → 그림자 누출 감소</td><td class="note">깊이에 이미 쓰는 방식(<a href="#quality">§06-2</a>)을 높이장에도 적용하는 것</td></tr>
+        <tr><td><s>AO를 높이장 해상도로 이동</s> <strong>— 완료</strong></td><td class="note">gpu 평균 <strong>22.1 ms</strong> · 최저 <strong>16.7 ms</strong> (직전 22.6~24.3 ms)</td><td class="note">전용 커널 <code>compute_ao_field</code>로 뺐다(<a href="#heightfield">§06-8</a>). 옮기면서 샘플을 8방향×5스텝으로 늘렸다가 이득을 통째로 날렸고, 4×4로 되돌려 회수했다</td></tr>
+        <tr class="lead"><td>레이마칭 계층화 (coarse → fine)</td><td class="note">같은 품질에 스텝 절반</td><td class="note">POM의 표준 기법. 거친 스텝으로 교차 구간을 찾고 그 안에서만 세밀하게 본다. 남은 항목 중 가장 크다</td></tr>
+        <tr><td>높이장 joint bilateral 업샘플</td><td class="note">실루엣 선명 → 그림자 누출 감소</td><td class="note">지금은 리라이팅이 높이장을 bilinear로 읽는다. 예산표(<a href="#budget">§09</a>)에 자리는 잡아 뒀지만 패스는 아직 없다</td></tr>
       </tbody>
-      <caption>셋 다 모델을 건드리지 않는다. 첫 항목만으로 재구성 이전 수준(<a href="#budget">§09</a>)에 근접한다.</caption>
+      <caption>셋 다 모델을 건드리지 않는다. 첫 항목으로 최저 16.7 ms까지 내려왔고, 남은 둘은 그 <em>평균</em>을 끌어내리는 쪽이다.</caption>
     </table>
   </div>
 
@@ -2174,7 +2269,7 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
 
   <div class="call cool">
     <span class="lbl">순서를 지키는 이유</span>
-    <p>위 세 덩어리는 비용이 완전히 다르다. AO 해상도는 한 줄 수준이고, 증류는 데이터 수집부터다.
+    <p>위 세 덩어리는 비용이 완전히 다르다. AO 해상도는 커널 하나를 떼어내는 수준이었고, 증류는 데이터 수집부터다.
       <a href="#budget">§09</a>에 적은 원칙과 같다 — <strong>학습은 마지막 카드다.</strong>
       그 전에 소진할 것이 남아 있으면, 학습은 문제를 해결하는 게 아니라 가린다.</p>
   </div>

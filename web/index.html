@@ -114,12 +114,13 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
         <h3>광선을 쏩니다</h3>
         <p>깊이맵을 높이장으로 재투영하면, 각 픽셀에서 광원까지의 광선이 <strong>텍스처 공간에서 직선</strong>이 됩니다 —
           게임의 시차 폐색 매핑(POM)과 같은 원리입니다. 중간에 무언가 가로막으면 그 픽셀은 그림자입니다.
-          카메라에 가까운 물체가 실제로 빛을 가립니다.</p>
+          카메라에 가까운 물체가 실제로 빛을 가립니다. 접촉 그늘(AO)은 높이장 해상도에서 따로 계산해 올립니다.</p>
       </div>
       <div class="cell">
         <h3>손이 곧 컨트롤러입니다</h3>
         <p>손도 화면 안에 있으니 깊이맵이 이미 손의 깊이를 알고 있습니다. 별도 센서가 필요 없고,
-          같은 이유로 손 그림자가 뺨을 가로지릅니다.</p>
+          같은 이유로 손 그림자가 뺨을 가로지릅니다. 놓아둔 광원 앞을 손으로 가리면
+          <strong>빛무리는 사라지고 조명은 남습니다</strong> — 전구를 가려도 방은 밝은 것과 같습니다.</p>
       </div>
       <div class="cell">
         <h3>Zoom으로 나갑니다</h3>
@@ -145,11 +146,12 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
       </table>
     </div>
     <p style="color:var(--muted);margin-top:1rem">앱이 실제로 쓰는 시간은 이와 별개입니다.
-      카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서 한 프레임이 <strong>GPU 22.6~24.3 ms</strong>입니다 —
-      30 fps 예산 33.3 ms 안입니다. 직전 점구름 레이마칭은 20.6~22.8 ms였습니다.
-      높이장으로 바꾸며 스텝당 투영은 없앴지만, 같은 변경에서 AO가 출력 해상도로 올라가 그 이득을 상쇄했습니다.
-      AO를 높이장 해상도로 내리면 되찾을 수 있고, 아직 하지 않았습니다 —
-      <a href="pipeline.html#next">다음 단계</a>에 적어 두었습니다.</p>
+      카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서 한 프레임이
+      <strong>GPU 평균 22.1 ms · 최저 16.7 ms</strong>(범위 16.7~31.1)입니다 — 30 fps 예산 33.3 ms 안입니다.
+      직전에는 22.6~24.3 ms였습니다. 높이장으로 바꾸며 스텝당 투영은 사라졌지만
+      같은 변경에서 AO가 출력 해상도(2.4M 픽셀)로 올라가 그 이득을 상쇄했고,
+      AO를 높이장 해상도(518×392)의 전용 커널로 되돌려 회수했습니다.
+      남은 항목은 <a href="pipeline.html#next">다음 단계</a>에 적어 두었습니다.</p>
   </div>
 </section>
 
@@ -215,7 +217,7 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
         const i = y * W + x;
         const h = height[i];
 
-        // 노멀: 이웃 높이차. (앱은 5-tap으로 실루엣까지 정확하게 처리한다)
+        // 노멀: 이웃 높이차. 앱도 같은 방식이다 — 높이장에서 바로 구하므로 위치 복원이 없다.
         const hl = sampleHeight(x - 1, y), hr = sampleHeight(x + 1, y);
         const hd = sampleHeight(x, y - 1), hu = sampleHeight(x, y + 1);
         let nx = (hl - hr) * 0.5, ny = (hd - hu) * 0.5, nz = 1;
