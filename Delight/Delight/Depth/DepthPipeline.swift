@@ -214,7 +214,11 @@ nonisolated final class DepthPipeline {
 
         let argumentDescriptor = MTL4ArgumentTableDescriptor()
         argumentDescriptor.maxBufferBindCount = 8
-        argumentDescriptor.maxTextureBindCount = 4
+        // 가장 많이 쓰는 패스(relight)가 텍스처 5개를 바인딩한다:
+        // source, height, normal, ao, output. 상한이 모자라면 Metal이 assert로 죽는다.
+        // ⚠️ 검증 레이어가 꺼진 실행에서는 조용히 지나가고 Xcode에서만 잡힌다 —
+        // 텍스처를 추가할 때 이 값을 같이 올리는 것을 잊지 말 것.
+        argumentDescriptor.maxTextureBindCount = 8
         self.argumentTable = try device.makeArgumentTable(descriptor: argumentDescriptor)
 
         // Metal 4는 자동 레지던시가 없다.
