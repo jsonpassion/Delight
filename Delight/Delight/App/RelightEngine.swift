@@ -250,8 +250,7 @@ final class RelightEngine {
                             self.applyPinch(result)
                         } else {
                             // 손이 안 보이면 **위치를 예측하지 않는다.**
-                            // 마지막 자리에 광원을 남기면 그 자리가 오브젝트 앞일 때
-                            // "뒤로 보냈는데 앞에 붙는" 버그가 된다. 그냥 놓는다.
+                            // 잡은 상태만 풀고 광원은 마지막 자리에 그대로 둔다.
                             var released = self.pinch
                             released.isPinching = false
                             self.applyPinch(released)
@@ -376,14 +375,11 @@ final class RelightEngine {
         }
         let pinch = pinch
         guard pinch.isPinching else {
-            // 핀치를 놓으면 광원도 즉시 사라진다.
-            // 손을 놓은 뒤 광원이 손등 뒤나 얼굴 속에 남아 있는 상태 자체를 없앤다.
+            // 핀치를 놓아도 광원은 마지막 위치에 그대로 남는다.
+            // 조명을 놓아둔 자리에 계속 있는 것이 스탠드를 놓는 것과 같은 감각이다.
             lightRig.releaseGrab()
-            lightRig.isLit = false
-            publishLighting()
             return
         }
-        lightRig.isLit = true
         // 깊이가 신뢰할 수 없으면(가림 경계) 이번 프레임은 움직이지 않는다.
         guard pinch.depthIsReliable else { return }
         moveLight(toNormalized: SIMD2<Float>(Float(pinch.position.x), Float(pinch.position.y)),
