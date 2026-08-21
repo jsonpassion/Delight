@@ -261,7 +261,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
         <tr><td>C1 안정화</td><td>역깊이 → 정합된 역깊이</td><td class="n">~1.0 ms</td><td class="note">상대깊이라 프레임마다 스케일이 흔들린다. 배경을 앵커로 고정(<a href="#stabilize">§06-4</a>)</td></tr>
         <tr><td>C3 높이장</td><td>깊이 → 높이·노멀·마스크</td><td class="n">~0.8 ms</td><td class="note">노멀은 이웃 높이차로 구한다. 뷰공간 위치 복원이 없다(<a href="#heightfield">§06-8</a>)</td></tr>
         <tr><td>C4 AO</td><td>높이장 → AO (518×392)</td><td class="n">—</td><td class="note">높이장 해상도의 전용 커널. 4방향×4스텝. 출력 해상도에서 돌던 것을 내렸다(<a href="#heightfield">§06-8</a>)</td></tr>
-        <tr><td>C5 리라이팅</td><td>높이·노멀·AO·원본 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">텍스처 공간 레이마칭 + 확산 + 스펙큘러 + 역광. AO는 C4 결과를 샘플만 한다</td></tr>
+        <tr><td>C5 리라이팅</td><td>높이·노멀·AO·원본 → 최종 색</td><td class="n">~3.0 ms</td><td class="note">출력 해상도(1552×1552)에서 균일 16스텝 텍스처 공간 레이마칭 + 확산 + 스펙큘러 + 역광. AO는 C4 결과를 샘플만 한다</td></tr>
       </tbody>
       <caption>스테이지 번호는 코드 주석(<code>[C0]</code>…<code>[C5]</code>)과 같다. C2가 비어 있는 것은 깊이 시각화 패스를 지웠기 때문이고(<a href="#simplify">§06-7</a>), 예정된 joint bilateral 업샘플은 아직 없다(<a href="#next">§12</a>) — 지금은 C5가 높이장을 bilinear로 읽는다. 개별 비용은 M5 기준 추정이고 실측은 추론과 프레임 전체(<a href="#budget">§09</a>)뿐이다. ML 15.4 ms가 압도적이므로 최적화 노력은 전부 그쪽에 걸어야 한다.</caption>
     </table>
@@ -402,7 +402,7 @@ AVCaptureConnection.cameraIntrinsicMatrixDelivery*  → API_UNAVAILABLE(macos)</
       <circle cx="800" cy="262" r="3.5" fill="var(--fill)"/>
       <text x="840" y="232" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="var(--fill)">조명 받음</text>
 
-      <text x="40" y="306" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="currentColor" opacity=".7">가려짐 판정:  bias &lt; (ray.z − sceneZ(uv)) &lt; thickness      ·  16–32 스텝, 원뿔 지터링으로 페넘브라</text>
+      <text x="40" y="306" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="currentColor" opacity=".7">가려짐 판정:  bias &lt; (ray.z − sceneZ(uv)) &lt; thickness      ·  균일 16스텝, 시작점 지터링</text>
     </svg>
     <figcaption>모노큘러 깊이는 2.5D다 — 물체의 뒤쪽을 모른다. 두께 창이 없으면 표면 뒤로 들어간 모든 픽셀이 가려진 것으로 판정되어 화면 전체가 검게 죽는다.</figcaption>
   </figure>
@@ -1636,15 +1636,15 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
       <tbody>
         <tr><td>전처리</td><td class="n">0.2 ms</td><td class="note">리샘플 + 텐서 쓰기</td></tr>
         <tr class="lead"><td>추론 (30 Hz)</td><td class="n">7.7 ms</td><td class="note">15.4 ms를 두 프레임에 분산</td></tr>
-        <tr><td>깊이 안정화</td><td class="n">1.0 ms</td><td class="note">half-res 필터</td></tr>
+        <tr><td>깊이 안정화</td><td class="n">1.0 ms</td><td class="note">half-res 필터 — 구현은 모델 해상도 518×392의 <code>stabilize</code> 커널이다</td></tr>
         <tr><td>업샘플</td><td class="n">1.0 ms</td><td class="note">joint bilateral — <strong>아직 없다.</strong> 지금은 리라이팅이 높이장을 bilinear로 읽는다(<a href="#next">§12</a>)</td></tr>
         <tr><td>높이장</td><td class="n">0.8 ms</td><td class="note">높이 + 이웃 높이차 노멀</td></tr>
         <tr><td>AO</td><td class="n">1.5 ms</td><td class="note">half-res 전제. 높이장 해상도(518×392)의 전용 커널 <code>compute_ao_field</code>로 내려왔다 — 출력 해상도에서 돌던 구조는 이 예산을 넘었다(<a href="#heightfield">§06-8</a>)</td></tr>
-        <tr><td>리라이팅 + 레이마칭</td><td class="n">3.0 ms</td><td class="note">half-res, 24스텝</td></tr>
+        <tr><td>리라이팅 + 레이마칭</td><td class="n">3.0 ms</td><td class="note">예산은 half-res·24스텝으로 적었지만 <strong>구현은 출력 해상도 1552×1552(2.4 M 픽셀) · 균일 16스텝</strong>이다. half-res 레이마칭은 한 번도 구현된 적이 없다 — 높이장만 저해상도로 두고 조명은 출력 해상도에서 돌리는 것이 지금의 아키텍처다(<a href="#heightfield">§06-8</a>)</td></tr>
         <tr><td>resolve</td><td class="n">1.0 ms</td><td class="note">시간누적 + 업스케일</td></tr>
         <tr><td><strong>합계</strong></td><td class="n"><strong>16.2 ms</strong></td><td class="note">60 fps에 아슬아슬하게</td></tr>
       </tbody>
-      <caption>여유가 없으면 이 순서로 깎는다: ① 레이마칭 24→16스텝 ② AO 끄기 ③ 추론 20 Hz ④ 출력 30 fps. 마지막은 사실상 공짜다 — Zoom이 어차피 30 fps로 인코딩한다.</caption>
+      <caption>이 표는 <strong>60 fps 목표의 배분</strong>이고 아래 실측은 캡처 30 fps 기준이다 — 성격이 다른 두 기준이므로 행끼리 빼서 읽으면 안 된다. 회수 순서는 ① 레이마칭 24→16스텝 ② AO 끄기 ③ 추론 20 Hz ④ 출력 30 fps였는데, <strong>①은 이미 썼다</strong> — 코드의 <code>raymarchSteps</code>는 16이다(<a href="#rejected">§09-4</a>). 남은 카드는 ②③④이고 마지막은 사실상 공짜다 — Zoom이 어차피 30 fps로 인코딩한다.</caption>
     </table>
   </div>
 
@@ -2302,6 +2302,11 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
   <p>규칙은 <a href="#profiling">§09-1</a>의 이등분과 같은 뿌리다 —
     <strong>비교하려면 비교되는 조건을 먼저 만든다.</strong> 스위치를 만드는 비용이 애매한 숫자를 붙들고 있는 시간보다 항상 싸다.
     그리고 이 문서에 적힌 값들은 세션이 다르면 서로 빼서 읽을 수 없다는 뜻이기도 하다(<a href="#budget">§09</a>).</p>
+  <p>숫자가 거짓말하는 또 한 가지 방식은 <strong>계획값이 실측값의 얼굴로 남아 있는</strong> 것이다.
+    <a href="#budget">§09</a> 예산표의 리라이팅 행은 오래 <code>half-res, 24스텝</code>이었지만,
+    코드는 출력 해상도에서 16스텝을 돈다 — half-res 레이마칭은 설계 문서의 예산 항목이었을 뿐 <strong>한 번도 구현된 적이 없다.</strong>
+    예산표가 코드보다 오래 살아남은 것이다. 계획으로 쓴 표는 계획이라고 못 박아 두거나,
+    코드가 바뀔 때 같이 고쳐야 한다 — 그러지 않으면 다음 사람이 그것을 실측으로 읽는다.</p>
 
   <h3>11. 잘한 판단들도 기록해 둔다</h3>
   <p>회고가 실패 목록만 되면 다음에 무엇을 <em>또 해야 하는지</em>를 잃는다.</p>
