@@ -37,12 +37,12 @@ Metal 4 ML 인코더가 ANE보다 26% 빠르고, 무엇보다 **CPU 동기화가
 추론·라이팅·드로우가 하나의 커맨드 버퍼 안에서 GPU 타임라인으로 이어집니다.
 
 앱이 실제로 쓰는 시간은 이와 별개입니다. 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서
-한 프레임이 **GPU 평균 22.1 ms · 최저 16.7 ms**(범위 16.7~31.1)입니다 — 30 fps 예산 33.3 ms 안입니다.
-직전에는 22.6~24.3 ms였습니다. 높이장으로 바꾸며 스텝당 투영은 사라졌지만
-같은 변경에서 AO가 출력 해상도(2.4M 픽셀)로 올라가 그 이득을 상쇄했고,
-AO를 높이장 해상도(518×392)의 전용 커널로 되돌려 회수했습니다.
-옮기면서 샘플을 8방향×5스텝으로 늘렸다가 이득을 통째로 날린 구간(24~32 ms)도 있었습니다 —
-4×4로 되돌려서 회수했습니다.
+한 프레임이 **GPU 평균 23.7 ms**(범위 21.0~33.1)입니다 — 30 fps 예산 33.3 ms 안입니다.
+
+이 값은 **발열 구간을 포함한 세션**의 것이라 이전에 기록한 22.1 ms와 단순 비교하면 안 됩니다.
+같은 세션 안에서 반복 실행만으로 gpu가 21 ms대에서 30 ms대로 밀렸습니다 —
+그래서 변경의 효과는 앞뒤 절대값이 아니라 **한 세션 안의 A/B 교차 측정**으로만 판정합니다
+([§09-4](https://jsonpassion.github.io/Delight/pipeline.html#rejected)).
 
 ## 어떻게 동작하나
 
@@ -128,7 +128,12 @@ xcrun swiftc -O -o /tmp/bench4 Tools/bench_mtl4ml.swift && /tmp/bench4 Models/De
   gpu 평균 22.1ms · 최저 16.7ms (직전 22.6~24.3ms) ·
   놓아둔 광원을 손으로 가리면 빛무리만 사라지도록 수정 ·
   [§06-8](https://jsonpassion.github.io/Delight/pipeline.html#heightfield)
-- [ ] **남은 회수** 레이마칭 계층화(coarse → fine) · 높이장 joint bilateral 업샘플 ·
+- [x] **기각** 레이마칭 계층화(coarse → fine) — 구현 후 같은 세션 교차 측정에서
+  균일 29.8ms vs 계층 31.0ms로 **오히려 느려** 되돌렸습니다.
+  워프 발산 · 의존적 텍스처 페치 · 캐시 지역성이 이유입니다.
+  A/B 스위치까지 지우고 셰이더 주석에 측정값을 남겼습니다 ·
+  [§09-4](https://jsonpassion.github.io/Delight/pipeline.html#rejected)
+- [ ] **남은 회수** 높이장 joint bilateral 업샘플 · 도메인 증류 ·
   [§12](https://jsonpassion.github.io/Delight/pipeline.html#next)
 
 ## 프라이버시

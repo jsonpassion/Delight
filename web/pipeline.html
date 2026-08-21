@@ -159,6 +159,7 @@ footer div{max-width:70rem;margin:0 auto;display:flex;flex-wrap:wrap;gap:.5rem 1
     <li><a href="#profiling">변동폭의 정체</a></li>
     <li><a href="#broadcast">Zoom까지 가는 길</a></li>
     <li><a href="#extension">OBS 없이 Zoom으로</a></li>
+    <li><a href="#rejected">기각된 최적화</a></li>
     <li><a href="#repro">재현 절차</a></li>
     <li><a href="#lessons">회고: 반복된 실수와 반복된 성공</a></li>
     <li><a href="#next">다음 단계</a></li>
@@ -1648,9 +1649,10 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
   </div>
 
   <div class="call good">
-    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps · AO를 높이장 해상도로 내린 뒤)</span>
-    <pre style="margin:.5rem 0 0"><code>gpu   평균 <span class="hl">22.1 ms</span>  최저 16.7  범위 16.7 ~ 31.1   <span class="cmt">← 실사용 경로</span>
-직전  22.6 ~ 24.3 ms   <span class="cmt">(AO가 출력 해상도에 있던 높이장 재구성 직후)</span>
+    <span class="lbl">실측 — 현재 (M5 · 카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps · 균일 마칭 16스텝으로 되돌린 뒤)</span>
+    <pre style="margin:.5rem 0 0"><code>gpu   평균 <span class="hl">23.7 ms</span>  범위 21.0 ~ 33.1   <span class="cmt">← 실사용 경로 (발열 구간 포함)</span>
+직전  22.1 ms 평균     <span class="cmt">(AO를 높이장 해상도로 내린 직후 — 다른 세션이다)</span>
+그 전 22.6 ~ 24.3 ms   <span class="cmt">(AO가 출력 해상도에 있던 높이장 재구성 직후)</span>
 그 전 20.6 ~ 22.8 ms   <span class="cmt">(점구름 레이마칭)</span>
 그 전 17.8 ms          <span class="cmt">(구 면광원 이전)</span></code></pre>
     <p style="margin-top:.6rem">위 예산표는 60 fps 목표의 배분이고, 이것은 현재 앱이 실제로 쓰는 시간이다.
@@ -1663,8 +1665,15 @@ static_assert(sizeof(SunUniforms) == 288, "Swift 미러와 다르다");</code></
       같은 커밋에서 별도 AO 패스를 지우고 AO를 출력 해상도(2.4 M 픽셀)에서 매 픽셀 계산하게 됐기 때문이다.
       그 AO를 <strong>높이장 해상도의 전용 커널로 되돌려</strong> 평균 22.1 ms · 최저 16.7 ms가 됐다 —
       좋은 프레임은 60 fps 예산(16.7 ms)과 같은 값까지 떨어진다.</p>
-    <p>범위 상단 31.1 ms는 <a href="#profiling">§09-1</a>에서 확인한 <strong>콜드 스타트</strong> 구간을 포함한 값이다.
-      남은 회수 항목(레이마칭 계층화 · joint bilateral 업샘플)은 <a href="#next">§12</a>에 있다.</p>
+    <p>범위 상단 33.1 ms는 <a href="#profiling">§09-1</a>에서 확인한 <strong>콜드 스타트</strong>와 발열 구간을 포함한 값이다.
+      남은 회수 항목(joint bilateral 업샘플 · 도메인 증류)은 <a href="#next">§12</a>에 있다.
+      레이마칭 계층화는 실측으로 <strong>기각했다</strong>(<a href="#rejected">§09-4</a>).</p>
+
+    <p><strong>이 23.7 ms를 위의 22.1 ms에서 빼서 읽으면 안 된다.</strong>
+      두 값은 다른 세션에서 나왔고, 계층화를 재던 세션은 후반으로 갈수록
+      코드와 무관하게 gpu가 21 ms대에서 30 ms대로 밀렸다 — 반복 실행에 따른 발열로 보인다.
+      세션이 다른 절대값끼리의 차이는 변경의 효과가 아니다.
+      같은 조건 비교가 필요하면 <a href="#rejected">§09-4</a>처럼 한 세션 안에서 스위치로 교차 측정한다.</p>
   </div>
 
   <h3>더 빠르게 만들어야 한다면 — 이 순서로</h3>
@@ -2021,6 +2030,88 @@ $ security find-identity -v -p codesigning
 </section>
 
 <!-- ─────────────────────────────────────── -->
+<section id="rejected">
+  <h2><span class="num">09-4</span>기각된 최적화: 레이마칭 계층화</h2>
+  <p class="dek">POM 교과서에 있는 기법을 구현했고, 같은 세션 교차 측정이 기각했다. 되돌리면서 코드에서도 지웠다 — 다음 사람이 같은 실험을 다시 하지 않도록.</p>
+
+  <p>학습 없이 되는 회수 항목 중 <a href="#next">§12</a>에서 "남은 항목 중 가장 크다"고 적어 둔 것이
+    <strong>레이마칭 계층 탐색</strong>이었다.
+    성긴 스텝으로 교차가 일어난 <em>구간</em>만 찾고, 그 구간 안에서 이진 탐색을 4회 돌려 진입점을 좁힌다.
+    POM 문헌에서 표준으로 취급되는 방식이다.</p>
+
+  <h3>이론상 이득 — 왜 될 것 같았나</h3>
+  <ul>
+    <li><strong>그림자 없는 픽셀은 성긴 스텝만 걷는다</strong> — 스텝 수가 절반이 된다.
+      화면 대부분은 그림자가 아니므로 다수의 픽셀이 이 경로를 탄다.</li>
+    <li><strong>성긴 스텝 하나를 4회 이진 탐색으로 쪼개면 실효 정밀도가 16배</strong>다.
+      즉 스텝을 줄이면서 경계는 더 선명해져야 한다.</li>
+  </ul>
+
+  <h3>측정 — 같은 세션에서 스위치 하나로 교차 측정</h3>
+  <p>구현한 뒤 <code>--uniform-march</code> 플래그를 붙여 <strong>같은 실행 세션 안에서</strong> 균일 마칭과 계층 마칭을 번갈아 켰다.
+    앞뒤로 따로 실행해 절대값을 비교하지 않은 이유는 아래 방법론 항목에 있다.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>레이마칭</th><th class="n">gpu</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td>균일 (<code>--uniform-march</code>)</td><td class="n">29.8 ms</td><td class="note">이쪽이 빠르다</td></tr>
+        <tr><td>계층 (coarse → 이진 탐색 4회)</td><td class="n">31.0 ms</td><td class="note">1.2 ms 느리다</td></tr>
+      </tbody>
+      <caption>M5, 같은 세션에서 스위치로 교차 측정. coarse 스텝을 8에서 5로 줄여도 개선되지 않았다 — 스텝 수가 문제가 아니라는 신호였다.</caption>
+    </table>
+  </div>
+
+  <h3>왜 이론이 빗나갔나 — 이유는 GPU 구조에 있다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>이론이 가정한 것</th><th>GPU에서 실제로 일어난 것</th></tr></thead>
+      <tbody>
+        <tr class="lead"><td>스텝을 덜 걸으면 시간이 줄어든다</td><td class="note">워프 안에서 교차를 만난 스레드와 아닌 스레드가 갈라지면 <strong>SIMD는 양쪽을 다 실행한다.</strong> 한 워프에 교차 픽셀이 하나라도 있으면 그 워프 전체가 fine 경로 비용을 낸다 — 스텝 수가 줄어도 시간이 줄지 않는다</td></tr>
+        <tr><td>이진 탐색은 페치 횟수가 적어 싸다</td><td class="note">이진 탐색의 다음 좌표는 <strong>앞 페치 결과에 의존한다.</strong> 주소가 미리 정해지지 않으니 파이프라이닝이 막히고, 페치 하나하나가 지연을 그대로 노출한다</td></tr>
+        <tr><td>페치 횟수가 곧 메모리 비용이다</td><td class="note">균일 마칭은 광선 방향으로 <strong>일정 간격을 훑는 예측 가능한 접근</strong>이라 캐시에 잘 맞는다. 계층 탐색은 구간 안을 뛰어다녀 그 지역성을 깬다</td></tr>
+      </tbody>
+      <caption>셋 다 "연산 횟수"가 아니라 "실행 형태"의 문제다. 스텝을 세는 모델로는 예측할 수 없었다.</caption>
+    </table>
+  </div>
+
+  <h3>되돌렸고, 코드에서도 지웠다</h3>
+  <p>균일 마칭 16스텝으로 되돌리면서 <strong>A/B 스위치까지 제거했다.</strong>
+    쓸모를 다한 이등분 도구를 남겨두는 판단(<a href="#profiling">§09-1</a>의 <code>--no-matte</code>)과는 반대로 갔는데, 이유가 다르다 —
+    <code>--no-matte</code>는 <em>앞으로도 다시 물을 질문</em>을 이등분하는 도구이고,
+    계층 마칭은 <strong>결론이 난 실험</strong>이다.
+    결론이 난 실험을 코드에 남겨두면 다음 사람이 그것을 보고 다시 잰다.</p>
+  <p>대신 <code>traceShadow</code> 주석에 측정값과 이유를 박아 뒀다. 지운 코드가 아니라 <strong>지운 이유</strong>가 남아야 반복을 막는다.</p>
+
+  <pre><code><span class="cmt">// 균일 스텝으로 훑는다.
+//
+// 계층 탐색(성긴 스텝 + 이진 탐색)을 구현해 같은 세션에서 교차 측정했더니
+// 이 워크로드에서는 **더 느렸다**(균일 29.8ms vs 계층 31.0ms).
+// 이론상 스텝 수는 줄지만, GPU는 SIMD라 워프 안에서 교차를 만난 스레드와
+// 아닌 스레드가 갈라지면 양쪽을 다 실행한다. 이진 탐색은 앞 결과에 의존하는
+// 텍스처 페치라 파이프라이닝도 막힌다. 균일 마칭의 예측 가능한 접근이
+// 캐시에 더 잘 맞았다.</span>
+uint steps = max(u.raymarchSteps, 4u);</code></pre>
+
+  <div class="call bad">
+    <span class="lbl">이 실험이 실제로 가르친 것 — 절대값을 비교하면 안 된다</span>
+    <p>처음에는 <strong>계층화 후 22.7 ms</strong>를 읽고 직전에 재둔 <strong>21.4 ms</strong>와 비교했다.
+      "조금 느려졌지만 오차 범위"로 읽힐 수도, "느려졌다"로 읽힐 수도 있는 애매한 숫자였다.
+      그런데 세션 후반으로 갈수록 <strong>gpu 수치가 전반적으로 21 ms대에서 30 ms대로 올라갔다.</strong>
+      코드와 무관하게, 반복 실행에 따른 발열로 보인다.</p>
+    <p>즉 <strong>앞뒤로 따로 잰 두 숫자의 차이에는 변경의 효과와 발열의 효과가 섞여 있었다.</strong>
+      그 차이를 아무리 들여다봐도 결론은 나오지 않는다.
+      <code>--uniform-march</code>로 <em>같은 세션에서</em> 번갈아 재고 나서야 29.8 vs 31.0이라는 답이 나왔다.</p>
+    <p>규칙은 하나다 — <strong>비교는 같은 조건에서 한다.</strong>
+      A/B 스위치를 먼저 만드는 비용은 애매한 숫자를 붙들고 있는 시간보다 항상 싸다.</p>
+  </div>
+
+  <p>되돌린 뒤 최종 실측은 <strong>gpu 평균 23.7 ms</strong>(범위 21.0~33.1)다.
+    이 값도 발열 구간을 포함한 세션의 것이므로 이전에 기록한 22.1 ms와 직접 빼서 읽으면 안 된다(<a href="#budget">§09</a>).
+    남은 회수 항목은 <a href="#next">§12</a>에 있고, 계층화는 거기서 <strong>기각으로 표시했다.</strong></p>
+</section>
+
+<!-- ─────────────────────────────────────── -->
 <section id="repro">
   <h2><span class="num">10</span>재현 절차</h2>
   <p class="dek">여기 적힌 수치는 전부 아래 명령으로 다시 나온다.</p>
@@ -2077,6 +2168,9 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       통합 메모리라 15.1~15.6 ms로 <strong>차이가 없었다</strong>. 겁먹고 안 했으면 핀치 z를 못 얻었다.</li>
     <li><strong>해상도를 31% 올렸는데 빨라졌다</strong>(<a href="#quality">§06-2</a> · <a href="#profiling">§09-1</a>) —
       1:1 페치로 리샘플이 사라지고 CPU 후처리 2.5 ms가 빠진 효과가 픽셀 증가보다 컸다.</li>
+    <li><strong>레이마칭 계층화</strong>(<a href="#rejected">§09-4</a>) — POM 표준 기법이고 스텝 수가 절반이 되니 빨라진다고 봤다.
+      같은 세션 교차 측정은 <strong>균일 29.8 ms vs 계층 31.0 ms</strong>, 오히려 느렸다.
+      스텝을 세는 모델로는 워프 발산도 의존적 페치도 보이지 않는다.</li>
     <li><strong>AO를 저해상도로 옮기며 샘플도 늘렸다</strong>(<a href="#heightfield">§06-8</a>) —
       "싸졌으니 품질을 올리자"가 자연스러워서 4방향×3스텝을 8×5로 함께 바꿨다.
       결과는 gpu 24~32 ms, <strong>이동 이득이 통째로 사라졌다</strong>. 4×4로 되돌려 평균 22.1 ms · 최저 16.7 ms를 회수했다.
@@ -2198,7 +2292,18 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     </table>
   </div>
 
-  <h3>10. 잘한 판단들도 기록해 둔다</h3>
+  <h3>10. 같은 조건에서 재지 않으면 측정이 거짓말한다</h3>
+  <p>7번이 "도구가 거짓말한다"였다면 이것은 <strong>도구가 맞는데도 숫자가 거짓말하는</strong> 경우다.
+    계층화를 재던 세션에서 gpu가 후반으로 갈수록 <strong>21 ms대에서 30 ms대로 밀렸다</strong>(<a href="#rejected">§09-4</a>).
+    코드는 그대로였다 — 반복 실행에 따른 발열로 보인다.</p>
+  <p>그래서 "계층화 후 22.7 ms" vs "직전 21.4 ms"라는 첫 읽기는 아무것도 말해 주지 않았다.
+    그 차이 안에는 <strong>변경의 효과와 발열의 효과가 섞여</strong> 있었고, 섞인 값은 아무리 들여다봐도 분리되지 않는다.
+    결론은 <code>--uniform-march</code> 스위치로 <strong>한 세션 안에서 번갈아 잰</strong> 뒤에야 나왔다.</p>
+  <p>규칙은 <a href="#profiling">§09-1</a>의 이등분과 같은 뿌리다 —
+    <strong>비교하려면 비교되는 조건을 먼저 만든다.</strong> 스위치를 만드는 비용이 애매한 숫자를 붙들고 있는 시간보다 항상 싸다.
+    그리고 이 문서에 적힌 값들은 세션이 다르면 서로 빼서 읽을 수 없다는 뜻이기도 하다(<a href="#budget">§09</a>).</p>
+
+  <h3>11. 잘한 판단들도 기록해 둔다</h3>
   <p>회고가 실패 목록만 되면 다음에 무엇을 <em>또 해야 하는지</em>를 잃는다.</p>
   <ul>
     <li><strong>추론을 GPU 타임라인에 올린 것</strong>(<a href="#decisions">§03</a>) —
@@ -2211,6 +2316,9 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
     <li><strong>눈으로 볼 수 있는 산출물을 만든 것</strong>(<a href="#quality">§06-2</a> · <a href="#verify">§08</a>) —
       PNG 덤프 진단 경로가 흰 후광이 실루엣을 정확히 따라간다는 것을 한눈에 보여줬다.
       실시간 화면만 봤다면 못 잡았다.</li>
+    <li><strong>기각된 실험을 코드에서 지운 것</strong>(<a href="#rejected">§09-4</a>) —
+      계층 마칭과 A/B 스위치를 지우고 셰이더 주석에 측정값과 이유만 남겼다.
+      결론이 난 실험이 코드에 남아 있으면 다음 사람이 그것을 보고 다시 잰다.</li>
     <li><strong>이등분</strong>(<a href="#crash-triage">§07-1</a> · <a href="#profiling">§09-1</a>) —
       <code>--no-matte</code> 하나로 크래시 방아쇠를 확정했고, 같은 플래그로 성능 가설을 기각했다.
       쓸모를 다한 뒤에도 <strong>이등분 도구로 남겨뒀다</strong>.</li>
@@ -2236,10 +2344,10 @@ xcodebuild -project Delight/Delight.xcodeproj -scheme Delight -configuration Deb
       <thead><tr><th>항목</th><th>효과</th><th>근거</th></tr></thead>
       <tbody>
         <tr><td><s>AO를 높이장 해상도로 이동</s> <strong>— 완료</strong></td><td class="note">gpu 평균 <strong>22.1 ms</strong> · 최저 <strong>16.7 ms</strong> (직전 22.6~24.3 ms)</td><td class="note">전용 커널 <code>compute_ao_field</code>로 뺐다(<a href="#heightfield">§06-8</a>). 옮기면서 샘플을 8방향×5스텝으로 늘렸다가 이득을 통째로 날렸고, 4×4로 되돌려 회수했다</td></tr>
-        <tr class="lead"><td>레이마칭 계층화 (coarse → fine)</td><td class="note">같은 품질에 스텝 절반</td><td class="note">POM의 표준 기법. 거친 스텝으로 교차 구간을 찾고 그 안에서만 세밀하게 본다. 남은 항목 중 가장 크다</td></tr>
-        <tr><td>높이장 joint bilateral 업샘플</td><td class="note">실루엣 선명 → 그림자 누출 감소</td><td class="note">지금은 리라이팅이 높이장을 bilinear로 읽는다. 예산표(<a href="#budget">§09</a>)에 자리는 잡아 뒀지만 패스는 아직 없다</td></tr>
+        <tr><td><s>레이마칭 계층화 (coarse → fine)</s> <strong>— 기각</strong></td><td class="note">같은 품질에 스텝 절반 <em>일 것으로 봤다</em></td><td class="note">구현해서 같은 세션에서 교차 측정했더니 <strong>균일 29.8 ms vs 계층 31.0 ms</strong>로 오히려 느렸다. 워프 발산 · 의존적 페치 · 캐시 지역성이 이유다. 되돌렸다(<a href="#rejected">§09-4</a>)</td></tr>
+        <tr class="lead"><td>높이장 joint bilateral 업샘플</td><td class="note">실루엣 선명 → 그림자 누출 감소</td><td class="note">지금은 리라이팅이 높이장을 bilinear로 읽는다. 예산표(<a href="#budget">§09</a>)에 자리는 잡아 뒀지만 패스는 아직 없다</td></tr>
       </tbody>
-      <caption>셋 다 모델을 건드리지 않는다. 첫 항목으로 최저 16.7 ms까지 내려왔고, 남은 둘은 그 <em>평균</em>을 끌어내리는 쪽이다.</caption>
+      <caption>셋 다 모델을 건드리지 않는다. 첫 항목으로 최저 16.7 ms까지 내려왔고, 둘째는 실측이 기각했다. 학습 없이 남은 것은 joint bilateral 업샘플 하나다 — 이쪽은 속도보다 실루엣 품질 항목이다.</caption>
     </table>
   </div>
 
