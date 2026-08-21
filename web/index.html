@@ -112,8 +112,9 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
       </div>
       <div class="cell">
         <h3>광선을 쏩니다</h3>
-        <p>복원된 높이장 위에서 각 픽셀로부터 광원까지 광선을 진행시킵니다. 중간에 무언가 가로막으면
-          그 픽셀은 그림자입니다. 카메라에 가까운 물체가 실제로 빛을 가립니다.</p>
+        <p>깊이맵을 높이장으로 재투영하면, 각 픽셀에서 광원까지의 광선이 <strong>텍스처 공간에서 직선</strong>이 됩니다 —
+          게임의 시차 폐색 매핑(POM)과 같은 원리입니다. 중간에 무언가 가로막으면 그 픽셀은 그림자입니다.
+          카메라에 가까운 물체가 실제로 빛을 가립니다.</p>
       </div>
       <div class="cell">
         <h3>손이 곧 컨트롤러입니다</h3>
@@ -144,10 +145,11 @@ footer{border-top:1px solid var(--rule);background:var(--surface);padding:1.6rem
       </table>
     </div>
     <p style="color:var(--muted);margin-top:1rem">앱이 실제로 쓰는 시간은 이와 별개입니다.
-      카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서 깊이 처리 한 프레임이
-      <strong>23 ms</strong>입니다(구간: 인코딩 0.3 ms · GPU 20.6~22.8 ms).
-      직전까지 17.8 ms였고, 늘어난 시간은 피부 하이라이트를 점광원에서 구 면광원으로 바꾸며 치른 값입니다 —
-      30 fps 예산 33.3 ms 안입니다.</p>
+      카메라 네이티브 1552×1552 출력 · 캡처 30.0 fps에서 한 프레임이 <strong>GPU 22.6~24.3 ms</strong>입니다 —
+      30 fps 예산 33.3 ms 안입니다. 직전 점구름 레이마칭은 20.6~22.8 ms였습니다.
+      높이장으로 바꾸며 스텝당 투영은 없앴지만, 같은 변경에서 AO가 출력 해상도로 올라가 그 이득을 상쇄했습니다.
+      AO를 높이장 해상도로 내리면 되찾을 수 있고, 아직 하지 않았습니다 —
+      <a href="pipeline.html#next">다음 단계</a>에 적어 두었습니다.</p>
   </div>
 </section>
 
