@@ -56,6 +56,7 @@ nonisolated final class DepthPipeline {
 
     private let preprocessPSO: any MTLComputePipelineState
     private let heightFieldPSO: any MTLComputePipelineState
+    private let ambientOcclusionPSO: any MTLComputePipelineState
     private let relightPSO: any MTLComputePipelineState
     private let stabilizePSO: any MTLComputePipelineState
     private let mlPSO: any MTL4MachineLearningPipelineState
@@ -84,6 +85,8 @@ nonisolated final class DepthPipeline {
     /// ⚠️ 예전에는 heightTexture를 폴백으로 썼는데, 그러면 같은 커널이 그 텍스처를
     /// 읽으면서 동시에 쓰게 되어 정의되지 않은 동작이 된다(화면에 타일 크기 블록이 나타났다).
     private let dummyTexture: MTLTexture
+    /// AO는 높이장 해상도에서 미리 계산한다. 저주파 신호라 올려도 티가 안 난다.
+    private let ambientOcclusionTexture: MTLTexture
 
     private let staticResidency: any MTLResidencySet
     /// 카메라 텍스처는 매 프레임 바뀐다 — 커맨드 버퍼 단위 레지던시로 처리한다.
@@ -113,6 +116,7 @@ nonisolated final class DepthPipeline {
         }
         self.preprocessPSO = try computePipeline("preprocess_to_tensor")
         self.heightFieldPSO = try computePipeline("build_height_field")
+        self.ambientOcclusionPSO = try computePipeline("compute_ao_field")
         self.relightPSO     = try computePipeline("relight")
         self.stabilizePSO = try computePipeline("stabilize_depth")
 
@@ -206,6 +210,7 @@ nonisolated final class DepthPipeline {
         self.heightTexture = try makeGBuffer(.rg16Float)
         self.normalTexture = try makeGBuffer(.rgba16Float)
         self.dummyTexture  = try makeGBuffer(.r8Unorm)
+        self.ambientOcclusionTexture = try makeGBuffer(.r8Unorm)
 
         let argumentDescriptor = MTL4ArgumentTableDescriptor()
         argumentDescriptor.maxBufferBindCount = 8
@@ -222,6 +227,7 @@ nonisolated final class DepthPipeline {
         staticResidency.addAllocation(heightTexture)
         staticResidency.addAllocation(normalTexture)
         staticResidency.addAllocation(dummyTexture)
+        staticResidency.addAllocation(ambientOcclusionTexture)
         for buffer in stabilizedBuffers { staticResidency.addAllocation(buffer) }
         for texture in colorHistoryTextures { staticResidency.addAllocation(texture) }
         staticResidency.commit()
@@ -395,6 +401,22 @@ nonisolated final class DepthPipeline {
             encoder.endEncoding()
         }
 
+        // [C4] 앰비언트 오클루전 — 높이장 해상도(518×392)에서 계산한다.
+        // 출력 해상도로 올리면 픽셀 수가 6배가 되어 방향×스텝이 그대로 곱해진다.
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 0)
+            argumentTable.setTexture(heightTexture.gpuResourceID, index: 0)
+            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 1)
+            encoder.setArgumentTable(argumentTable)
+            encoder.setComputePipelineState(ambientOcclusionPSO)
+            encoder.dispatchThreads(
+                threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
+                            visibilityOptions: .device)
+            encoder.endEncoding()
+        }
+
         // [C5] 리라이팅 — 레이마칭 그림자 + 확산 + 스펙큘러 + 역광
         // relight 커널은 유니폼을 buffer(0)에서 읽는다(다른 커널과 인덱스가 다르다).
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
@@ -402,7 +424,8 @@ nonisolated final class DepthPipeline {
             argumentTable.setTexture(source.gpuResourceID, index: 0)
             argumentTable.setTexture(heightTexture.gpuResourceID, index: 1)
             argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
-            argumentTable.setTexture(relitTarget.gpuResourceID, index: 3)
+            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 3)
+            argumentTable.setTexture(relitTarget.gpuResourceID, index: 4)
             encoder.setArgumentTable(argumentTable)
             encoder.setComputePipelineState(relightPSO)
             encoder.dispatchThreads(

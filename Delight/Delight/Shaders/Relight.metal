@@ -104,45 +104,11 @@ inline float traceShadow(float2 startUV,
     return 1.0;
 }
 
-/// 높이장 위 앰비언트 오클루전. 여러 방향으로 짧게 마칭해 하늘이 얼마나 열렸는지 센다.
-/// 턱밑·목·코 옆의 접촉 그늘을 만든다 — 광원과 무관하게 항상 입체감을 올린다.
-inline float ambientOcclusion(float2 uv, float height,
-                              texture2d<float, access::sample> heightField,
-                              constant SunUniforms &u, uint2 gid)
-{
-    if (u.enableAO == 0) { return 1.0; }
-
-    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
-    // 출력 해상도가 2.4M 픽셀이다. 방향×스텝을 늘리면 그대로 곱해져 비용이 커진다.
-    // AO는 저주파 신호라 적은 샘플에 지터를 섞는 편이 낫다.
-    const uint directions = 4;
-    const uint stepsPerDirection = 3;
-    float reach = u.shadowReach * 0.25;
-    float jitter = dither(gid);
-
-    float occlusion = 0.0;
-    for (uint d = 0; d < directions; ++d) {
-        float angle = (float(d) + jitter) / float(directions) * 2.0 * kPI;
-        float2 direction = float2(cos(angle), sin(angle)) * (reach / float(stepsPerDirection));
-
-        float horizon = 0.0;
-        float2 p = uv;
-        for (uint s = 1; s <= stepsPerDirection; ++s) {
-            p += direction;
-            if (any(p < 0.0) || any(p > 1.0)) { break; }
-            float rise = (heightField.sample(linearSampler, p).r - height) / max(u.heightToUV, 1e-4);
-            // 거리로 나눈 기울기가 곧 지평선 각도다. 가장 높이 솟은 것이 가린다.
-            horizon = max(horizon, rise / (float(s) * reach / float(stepsPerDirection)));
-        }
-        occlusion += saturate(horizon);
-    }
-    return saturate(1.0 - occlusion / float(directions) * u.aoStrength);
-}
-
 kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
                     texture2d<float, access::sample> heightField [[texture(1)]],
                     texture2d<float, access::sample> normalTex   [[texture(2)]],
-                    texture2d<float, access::write>  outputTex   [[texture(3)]],
+                    texture2d<float, access::sample> aoTex       [[texture(3)]],
+                    texture2d<float, access::write>  outputTex   [[texture(4)]],
                     constant SunUniforms            &u           [[buffer(0)]],
                     uint2 gid [[thread_position_in_grid]])
 {
@@ -164,7 +130,10 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
     // 높이장 공간의 시선은 화면을 정면으로 본다.
     const float3 viewDirection = float3(0, 0, 1);
 
-    float ao = ambientOcclusion(uv, height, heightField, u, gid);
+    // AO는 높이장 해상도에서 미리 계산해 둔다.
+    // 출력 해상도(2.4M 픽셀)에서 방향×스텝을 돌리면 그대로 곱해져 비용이 폭증한다.
+    // 저주파 신호라 저해상도로 계산해 올려도 눈에 띄지 않는다.
+    float ao = u.enableAO ? aoTex.sample(linearSampler, uv).r : 1.0;
     float3 accumulated = float3(0.0);
     float3 glow = float3(0.0);
 
@@ -228,12 +197,22 @@ kernel void relight(texture2d<float, access::sample> sourceTex   [[texture(0)]],
                          * light.color * light.intensity * attenuation;
         }
 
-        // ── 광원 글로우: 높이로 가려지면 사라진다.
-        // "뒤로 넘겼다"를 눈으로 확인시켜 주는 장치다.
-        if (light.position.z > height) {
-            float2 delta = (uv - light.position.xy)
-                         * float2(float(u.outputWidth) / float(u.outputHeight), 1.0);
-            glow += exp(-dot(delta, delta) * 900.0) * light.color * light.intensity * 0.9;
+        // ── 광원 글로우: 앞을 무언가 가리면 사라지고 **빛만 남는다**.
+        //
+        // 조명 기여(accumulated)는 그대로 두고 빛무리만 지운다.
+        // 실제로 손으로 전구를 가리면 전구는 안 보이지만 방은 여전히 밝다.
+        //
+        // 판정은 픽셀별로 한다. 광원 중심 하나만 보면 손 경계에서 딱 잘리는데,
+        // 픽셀마다 그 자리 높이와 비교하면 손 윤곽을 따라 부드럽게 잘린다.
+        float2 delta = (uv - light.position.xy)
+                     * float2(float(u.outputWidth) / float(u.outputHeight), 1.0);
+        float halo = exp(-dot(delta, delta) * 900.0);
+        if (halo > 0.002) {
+            // 이 픽셀이 광원보다 카메라 쪽에 있으면 광원을 가린 것이다.
+            float occluded = smoothstep(light.position.z,
+                                        light.position.z + u.shadowBias * 4.0,
+                                        height);
+            glow += halo * (1.0 - occluded) * light.color * light.intensity * 0.9;
         }
     }
 

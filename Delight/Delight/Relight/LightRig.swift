@@ -92,6 +92,17 @@ final class LightRig {
     /// 광원이 손끝보다 얼마나 카메라 쪽에 뜨는가(정규화 높이).
     static let handLeadHeight: Float = 0.05
 
+    /// 광원 높이의 상한.
+    ///
+    /// 1.0으로 두면 손을 앞으로 내밀 때 광원이 천장에 붙고, 그 뒤로는
+    /// 어떤 손도 광원보다 앞에 올 수 없다 — 놓아둔 광원을 가릴 수 없게 된다.
+    /// 손이 지나갈 여유를 남기되, **피사체보다는 확실히 앞이어야** 한다.
+    ///
+    /// 정규화 범위가 0.35~3.0m라 웹캠 앞 사람의 높이는 0.9 근처다.
+    /// 상한을 그보다 낮게 잡았더니 광원이 늘 피사체 뒤로 가서
+    /// 앞면이 전부 그림자가 됐다 — 화면이 검게 죽는 또 하나의 경로였다.
+    static let maximumHeight: Float = 0.97
+
     /// 마지막으로 확정한 손 높이. 손을 놓쳐도 광원이 튀지 않게 유지한다.
     private var lastHandHeight: Float = 0.5
 
@@ -144,7 +155,7 @@ final class LightRig {
         lastHandHeight = handHeight
         let target = SIMD3<Float>(normalized.x,
                                   normalized.y,
-                                  min(handHeight + Self.handLeadHeight, 1.0))
+                                  min(handHeight + Self.handLeadHeight, Self.maximumHeight))
 
         // 보간하지 않는다. 손이 있는 곳에 광원이 있어야 한다 —
         // 날아가는 애니메이션은 그 사이 프레임에서 광원이 손과 다른 곳에 있다는 뜻이다.
