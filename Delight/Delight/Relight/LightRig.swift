@@ -13,8 +13,9 @@ import Observation
 
 struct PointLight: Identifiable, Equatable {
     let id = UUID()
-    /// 뷰공간 위치(미터). z가 클수록 카메라에서 멀다.
-    var position: SIMD3<Float> = .init(0.18, -0.12, 0.45)
+    /// 높이장 공간 위치. xy는 화면 정규화 좌표(0…1), z는 높이.
+    /// 높이가 클수록 카메라에 가깝다 — 깊이와 부호가 반대다.
+    var position: SIMD3<Float> = .init(0.5, 0.4, 0.6)
     var color: SIMD3<Float> = .init(1.0, 0.82, 0.62)   // 텅스텐 3200K
     var intensity: Float = 1.6
     /// 소프트섀도우 반경(미터). 두 손 핀치 간격에 매핑된다.
@@ -62,9 +63,9 @@ final class LightRig {
     // MARK: 레이마칭
 
     /// **가장 위험한 파라미터.** 크면 화면이 검게 죽고, 작으면 그림자가 안 생긴다.
-    var personThickness: Float = 0.12     // 몸통 ≈ 얼굴폭 × 0.25
-    var backgroundThickness: Float = 0.05
-    var raymarchSteps: Int = 24
+    var personThickness: Float = 0.06     // 몸통 ≈ 얼굴폭 × 0.25
+    var backgroundThickness: Float = 0.02
+    var raymarchSteps: Int = 16
 
     // MARK: 셰이딩
 
@@ -88,10 +89,20 @@ final class LightRig {
 
     /// 광원이 손끝보다 얼마나 카메라 쪽에 놓이는가(미터).
     /// 0이면 손 안에 파묻혀 보이지 않는다. 항상 손 앞에 떠 있어야 "잡았다"가 성립한다.
-    static let handLeadDistance: Float = 0.07
+    /// 광원이 손끝보다 얼마나 카메라 쪽에 뜨는가(정규화 높이).
+    static let handLeadHeight: Float = 0.05
 
-    /// 마지막으로 확정한 손 거리(미터). 진단용.
-    private(set) var trackedHandZ: Float = 0.5
+    /// 마지막으로 확정한 손 높이. 손을 놓쳐도 광원이 튀지 않게 유지한다.
+    private var lastHandHeight: Float = 0.5
+
+    /// 역깊이 → 높이장 높이. 파이프라인의 toHeight와 같은 식이어야 한다.
+    private func pinchHeight(fromInverseDepth inverseDepth: Float) -> Float {
+        let uniforms = SunUniforms()
+        let z = 1 / max(uniforms.affineA * min(max(inverseDepth, 0), 1) + uniforms.affineB, 1e-4)
+        let nearZ = 1 / max(uniforms.affineA + uniforms.affineB, 1e-3)
+        let farZ = 1 / max(uniforms.affineB, 1e-3)
+        return min(max((farZ - z) / max(farZ - nearZ, 1e-3), 0), 1)
+    }
 
     /// 광원이 켜져 있는가.
     ///
@@ -124,22 +135,16 @@ final class LightRig {
                isGrabbing: Bool = false) {
         guard lights.indices.contains(activeIndex) else { return }
 
-        if let handDepth {
-            let handZ = resolveHandDistance(inverseDepth: handDepth, affine: affine)
-            trackedHandZ = handZ
-            // 광원은 손보다 **카메라 쪽**에 놓는다.
-            // 손 뒤에 두면 손에 가려 보이지 않는다 — 잡고 있다는 감각이 사라진다.
-            let lightZ = max(handZ - Self.handLeadDistance, 0.08)
-            depthOffset = min(max(lightZ - subjectDepth, Self.nearestOffset), Self.farthestOffset)
-        }
-
-        let z = max(subjectDepth + depthOffset, 0.05)
-        let px = normalized.x * pixelSize.x
-        let py = normalized.y * pixelSize.y
-        let target = SIMD3<Float>(
-            (px - calibration.cx) / calibration.fx * z,
-            (py - calibration.cy) / calibration.fy * z,
-            z)
+        // 높이장 공간: xy는 화면 좌표 그대로, z는 높이(클수록 카메라에 가깝다).
+        //
+        // 광원은 **항상 핀치보다 앞(카메라 쪽)** 에 둔다.
+        // 손과 같은 높이에 두면 손에 파묻혀 보이지 않고, 뒤에 두면 손이 광원을 가린다.
+        // 잡고 있다는 감각은 광원이 손끝 위에 떠 있을 때 생긴다.
+        let handHeight = handDepth.map { pinchHeight(fromInverseDepth: $0) } ?? lastHandHeight
+        lastHandHeight = handHeight
+        let target = SIMD3<Float>(normalized.x,
+                                  normalized.y,
+                                  min(handHeight + Self.handLeadHeight, 1.0))
 
         // 보간하지 않는다. 손이 있는 곳에 광원이 있어야 한다 —
         // 날아가는 애니메이션은 그 사이 프레임에서 광원이 손과 다른 곳에 있다는 뜻이다.
@@ -148,17 +153,6 @@ final class LightRig {
 
     /// 핀치를 놓았을 때 호출한다. 다음 핀치가 다시 "날아오는" 애니메이션으로 시작한다.
     func releaseGrab() { }
-
-    /// 손까지의 거리를 미터로 정한다. **깊이맵만 쓴다.**
-    ///
-    /// 이전에는 손 크기(wrist↔middleMCP)로 거리를 외삽했다. 가림에 강하다는 장점이 있었지만,
-    /// 손을 돌리거나 주먹을 쥐면 같은 거리에서도 크기가 크게 변해 z가 틀렸다.
-    /// **보이지 않는 것을 추측하는 대신, 보이지 않으면 놓는다** —
-    /// 손이 가려지면 Vision이 손을 잃고, 그러면 핀치가 풀리고, 광원이 사라진다.
-    /// 광원이 엉뚱한 곳에 붙어 있는 것보다 잠깐 사라지는 쪽이 낫다.
-    private func resolveHandDistance(inverseDepth: Float, affine: SIMD2<Float>) -> Float {
-        1 / max(affine.x * min(max(inverseDepth, 0), 1) + affine.y, 1e-3)
-    }
 
     /// 셰이더 유니폼에 현재 상태를 싣는다.
     func fill(_ uniforms: inout SunUniforms) {

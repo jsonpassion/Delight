@@ -30,10 +30,17 @@ struct SunUniforms {
     var outputWidth: UInt32 = 0, outputHeight: UInt32 = 0
 
     // 레이마칭.
-    var raymarchSteps: UInt32 = 24
-    var personThickness: Float = 0.12
-    var backgroundThickness: Float = 0.05
-    var shadowBias: Float = 0.002
+    var raymarchSteps: UInt32 = 16
+    var personThickness: Float = 0.06
+    var backgroundThickness: Float = 0.02
+    var shadowBias: Float = 0.006
+    var shadowReach: Float = 0.35
+    var aoStrength: Float = 1.2
+
+    // 높이장 스케일 — 화면 uv와 높이의 단위를 맞춘다.
+    var heightScale: Float = 1
+    var heightToUV: Float = 3.0
+    var farDistance: Float = 3.0
 
     // 셰이딩.
     var skinRoughness: Float = 0.5
@@ -55,6 +62,7 @@ struct SunUniforms {
     var colorSigma: Float = 0.012
     var depthSigma: Float = 0.05
 
+    var debugMode: UInt32 = 0
     var lightCount: UInt32 = 1
     var lights: (SunLight, SunLight, SunLight, SunLight) = (SunLight(), SunLight(), SunLight(), SunLight())
 }

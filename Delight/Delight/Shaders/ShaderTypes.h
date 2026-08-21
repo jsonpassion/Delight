@@ -35,6 +35,13 @@ typedef struct {
     float personThickness;
     float backgroundThickness;
     float shadowBias;
+    float shadowReach;      // 높이장 공간에서 광선이 나아가는 거리
+    float aoStrength;
+
+    // 높이장 스케일 — 화면 uv와 높이의 단위를 맞춘다.
+    float heightScale;      // 미터 → 높이장 단위
+    float heightToUV;       // 높이 1단위 : uv 1단위 의 실제 비율
+    float farDistance;      // 높이 0의 기준 거리
 
     // 셰이딩.
     float skinRoughness;
@@ -56,6 +63,7 @@ typedef struct {
     float colorSigma;        // 색 변화 허용폭. 크면 고스팅, 작으면 떨림
     float depthSigma;        // 깊이 변화 허용폭
 
+    uint  debugMode;
     uint  lightCount;
     SunLight lights[4];
 } SunUniforms;
@@ -66,7 +74,7 @@ typedef struct {
 // 값을 바꿔야 한다면 Swift 쪽 MemoryLayout<...>.stride 를 찍어 확인할 것.
 #ifdef __METAL_VERSION__
 static_assert(sizeof(SunLight)    == 48,  "SunLight 레이아웃이 Swift 미러와 다르다");
-static_assert(sizeof(SunUniforms) == 320, "SunUniforms 레이아웃이 Swift 미러와 다르다");
+static_assert(sizeof(SunUniforms) == 336, "SunUniforms 레이아웃이 Swift 미러와 다르다");
 #endif
 
 #endif /* ShaderTypes_h */

@@ -55,9 +55,8 @@ nonisolated final class DepthPipeline {
     private var signalValue: UInt64 = 0
 
     private let preprocessPSO: any MTLComputePipelineState
-    private let gbufferPSO: any MTLComputePipelineState
+    private let heightFieldPSO: any MTLComputePipelineState
     private let relightPSO: any MTLComputePipelineState
-    private let ambientOcclusionPSO: any MTLComputePipelineState
     private let stabilizePSO: any MTLComputePipelineState
     private let mlPSO: any MTL4MachineLearningPipelineState
     private let intermediatesHeap: MTLHeap
@@ -77,12 +76,14 @@ nonisolated final class DepthPipeline {
     private var relitTextures: [MTLTexture] = []
     private var writeIndex = 0
 
-    /// G버퍼 — 뷰공간 위치, 노멀, 피사체 마스크. 프레임 안에서만 쓰이므로 링이 필요 없다.
-    private let positionTexture: MTLTexture
+    /// 높이장(R = 높이, G = 피사체 마스크)과 노멀.
+    /// 뷰공간 위치 텍스처가 사라졌다 — 높이장은 이 둘만 있으면 조명이 성립한다.
+    private let heightTexture: MTLTexture
     private let normalTexture: MTLTexture
-    private let matteTexture: MTLTexture
-    /// AO는 P3에서 채운다. 그때까지 흰색(차폐 없음)으로 바인딩만 유지한다.
-    private let ambientOcclusionTexture: MTLTexture
+    /// 세그멘테이션이 없을 때 바인딩할 더미.
+    /// ⚠️ 예전에는 heightTexture를 폴백으로 썼는데, 그러면 같은 커널이 그 텍스처를
+    /// 읽으면서 동시에 쓰게 되어 정의되지 않은 동작이 된다(화면에 타일 크기 블록이 나타났다).
+    private let dummyTexture: MTLTexture
 
     private let staticResidency: any MTLResidencySet
     /// 카메라 텍스처는 매 프레임 바뀐다 — 커맨드 버퍼 단위 레지던시로 처리한다.
@@ -111,9 +112,8 @@ nonisolated final class DepthPipeline {
             return pso
         }
         self.preprocessPSO = try computePipeline("preprocess_to_tensor")
-        self.gbufferPSO    = try computePipeline("build_gbuffer")
-        self.relightPSO    = try computePipeline("relight")
-        self.ambientOcclusionPSO = try computePipeline("compute_ao")
+        self.heightFieldPSO = try computePipeline("build_height_field")
+        self.relightPSO     = try computePipeline("relight")
         self.stabilizePSO = try computePipeline("stabilize_depth")
 
         // ML 파이프라인
@@ -203,11 +203,9 @@ nonisolated final class DepthPipeline {
             colorHistoryTextures.append(texture)
         }
 
-        self.positionTexture = try makeGBuffer(.rgba16Float)
-        self.normalTexture   = try makeGBuffer(.rgba16Float)
-        self.matteTexture    = try makeGBuffer(.r8Unorm)
-        self.ambientOcclusionTexture = try makeGBuffer(.r8Unorm)
-        // AO 텍스처는 셰이더가 쓰기도 하고 읽기도 한다(makeGBuffer가 둘 다 준다).
+        self.heightTexture = try makeGBuffer(.rg16Float)
+        self.normalTexture = try makeGBuffer(.rgba16Float)
+        self.dummyTexture  = try makeGBuffer(.r8Unorm)
 
         let argumentDescriptor = MTL4ArgumentTableDescriptor()
         argumentDescriptor.maxBufferBindCount = 8
@@ -221,10 +219,9 @@ nonisolated final class DepthPipeline {
         staticResidency.addAllocation(uniformBuffer)
         staticResidency.addAllocation(heap)
         for texture in relitTextures { staticResidency.addAllocation(texture) }
-        staticResidency.addAllocation(positionTexture)
+        staticResidency.addAllocation(heightTexture)
         staticResidency.addAllocation(normalTexture)
-        staticResidency.addAllocation(matteTexture)
-        staticResidency.addAllocation(ambientOcclusionTexture)
+        staticResidency.addAllocation(dummyTexture)
         for buffer in stabilizedBuffers { staticResidency.addAllocation(buffer) }
         for texture in colorHistoryTextures { staticResidency.addAllocation(texture) }
         staticResidency.commit()
@@ -271,6 +268,29 @@ nonisolated final class DepthPipeline {
             merged.outputHeight = uniforms.outputHeight
             merged.cx = uniforms.cx
             merged.cy = uniforms.cy
+
+            // ── 높이장 재투영 스케일 ──
+            // 화면 uv 1단위와 높이 1단위가 실제로 몇 미터인지를 맞춘다.
+            // 이게 틀리면 광선 기울기가 물리적으로 어긋나 그림자가 엉뚱하게 길거나 짧아진다.
+            let nearZ = 1 / max(merged.affineA + merged.affineB, 1e-3)   // 역깊이 1 → 가장 가까움
+            let farZ  = 1 / max(merged.affineB, 1e-3)                     // 역깊이 0 → 가장 멂
+            let depthSpan = max(farZ - nearZ, 1e-3)
+
+            // 피사체 거리에서 화면 전체 폭이 덮는 실제 거리.
+            let sceneWidth = merged.subjectDepth * Float(uniforms.outputWidth) / max(merged.fx, 1e-3)
+
+            // 높이는 [0,1]로 정규화하고, 실제 종횡비는 heightToUV가 들고 있는다.
+            merged.heightScale = 1 / depthSpan
+            merged.farDistance = farZ
+            merged.heightToUV = depthSpan / max(sceneWidth, 1e-3)
+            merged.shadowReach = 0.35
+            // --debug N 으로 중간 결과를 확인한다 (1=원본 2=AO 3=높이 4=노멀).
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "--debug"), i + 1 < args.count,
+               let v = UInt32(args[i + 1]) {
+                merged.debugMode = v
+            }
+
             uniforms = merged
         }
         uniforms.hasSegmentation = segmentation != nil ? 1 : 0
@@ -357,35 +377,16 @@ nonisolated final class DepthPipeline {
             encoder.endEncoding()
         }
 
-        // [C3] 지오메트리 — 역깊이 → 뷰공간 위치·5-tap 노멀·피사체 마스크
+        // [C3] 높이장 재투영 — 깊이 → 높이 + 노멀 + 마스크
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             argumentTable.setAddress(stabilizedBuffers[historyIndex].gpuAddress, index: 0)
             argumentTable.setAddress(uniformBuffer.gpuAddress, index: 1)
             argumentTable.setTexture(source.gpuResourceID, index: 0)
-            argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
-            argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
-            argumentTable.setTexture(matteTexture.gpuResourceID, index: 3)
-            // 세그멘테이션이 없으면 아무 텍스처나 바인딩해 둔다 — 셰이더가 플래그로 건너뛴다.
-            argumentTable.setTexture((segmentation ?? matteTexture).gpuResourceID, index: 4)
+            argumentTable.setTexture((segmentation ?? dummyTexture).gpuResourceID, index: 1)
+            argumentTable.setTexture(heightTexture.gpuResourceID, index: 2)
+            argumentTable.setTexture(normalTexture.gpuResourceID, index: 3)
             encoder.setArgumentTable(argumentTable)
-            encoder.setComputePipelineState(gbufferPSO)
-            encoder.dispatchThreads(
-                threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
-            encoder.barrier(afterStages: .dispatch, beforeQueueStages: .dispatch,
-                            visibilityOptions: .device)
-            encoder.endEncoding()
-        }
-
-        // [C4] 앰비언트 오클루전 — 턱밑·목·코 옆 접촉 그늘.
-        // G버퍼 해상도에서 계산한다. 저주파 신호라 풀 해상도가 필요 없다.
-        if uniforms.enableAO != 0, let encoder = commandBuffer.makeComputeCommandEncoder() {
-            argumentTable.setAddress(uniformBuffer.gpuAddress, index: 0)
-            argumentTable.setTexture(positionTexture.gpuResourceID, index: 0)
-            argumentTable.setTexture(normalTexture.gpuResourceID, index: 1)
-            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 2)
-            encoder.setArgumentTable(argumentTable)
-            encoder.setComputePipelineState(ambientOcclusionPSO)
+            encoder.setComputePipelineState(heightFieldPSO)
             encoder.dispatchThreads(
                 threadsPerGrid: MTLSize(width: Self.modelWidth, height: Self.modelHeight, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
@@ -399,11 +400,9 @@ nonisolated final class DepthPipeline {
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             argumentTable.setAddress(uniformBuffer.gpuAddress, index: 0)
             argumentTable.setTexture(source.gpuResourceID, index: 0)
-            argumentTable.setTexture(positionTexture.gpuResourceID, index: 1)
+            argumentTable.setTexture(heightTexture.gpuResourceID, index: 1)
             argumentTable.setTexture(normalTexture.gpuResourceID, index: 2)
-            argumentTable.setTexture(matteTexture.gpuResourceID, index: 3)
-            argumentTable.setTexture(ambientOcclusionTexture.gpuResourceID, index: 4)
-            argumentTable.setTexture(relitTarget.gpuResourceID, index: 5)
+            argumentTable.setTexture(relitTarget.gpuResourceID, index: 3)
             encoder.setArgumentTable(argumentTable)
             encoder.setComputePipelineState(relightPSO)
             encoder.dispatchThreads(
